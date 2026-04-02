@@ -1,3 +1,9 @@
+import sys
+try:
+    import setuptools
+except ImportError:
+    import os
+    os.system("pip install setuptools")
 import streamlit as st
 import requests
 import os

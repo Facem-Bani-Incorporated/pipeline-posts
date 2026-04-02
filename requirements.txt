@@ -2,7 +2,7 @@ streamlit
 requests
 moviepy==1.0.3
 imageio==2.25.1
-imageio-ffmpeg==0.4.8
+imageio-ffmpeg>=0.4.9
 decorator>=4.0.2,<5.0
 proglog==0.1.10
 setuptools
