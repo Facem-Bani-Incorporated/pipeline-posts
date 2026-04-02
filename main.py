@@ -5,7 +5,7 @@ import json
 from datetime import datetime
 import glob
 
-# --- 🎬 IMPORTURI MODERNE MOVIEPY (v2.0+) ---
+# --- 🎬 IMPORTURI MOVIEPY v2.0 ---
 from moviepy import TextClip, ImageClip, ColorClip, CompositeVideoClip, concatenate_videoclips
 from moviepy.config import configure_settings
 
@@ -16,55 +16,12 @@ configure_settings({"IMAGEMAGICK_BINARY": "/usr/bin/convert"})
 st.set_page_config(page_title="DailyHistory Viral Engine", page_icon="🔥", layout="centered")
 st.title("👑 DailyHistory Viral Engine")
 
-# Verificare Chei API
+# --- 🔑 CHEI API ---
 groq_key = os.getenv("GROQ_API_KEY")
-pexels_key = os.getenv("PEXELS_API_KEY")def create_viral_video(slides, duration):
-    clips = []
-    for i, slide in enumerate(slides):
-        img_url = get_image(slide['image_query'])
-
-        # Fundal negru 1080x1920
-        bg = ColorClip(size=(1080, 1920), color=(0, 0, 0)).with_duration(duration)
-
-        if img_url:
-            img_data = requests.get(img_url).content
-            temp_file = f"temp_{i}.jpg"
-            with open(temp_file, "wb") as f: f.write(img_data)
-
-            # Folosim resized() și with_position() conform v2.0
-            img_clip = ImageClip(temp_file).with_duration(duration).resized(width=1080).with_position("center")
-            base = CompositeVideoClip([bg, img_clip])
-        else:
-            base = bg
-
-        # Text Overlay
-        try:
-            txt = TextClip(
-                text=slide['text'],
-                font_size=70,
-                color='white',
-                method='caption',
-                size=(900, None),
-                font="Arial-Bold" # Railway are fonturi standard de sistem
-            ).with_duration(duration).with_position("center")
-
-            txt_bg = ColorClip(size=(txt.w + 40, txt.h + 40), color=(0,0,0)).with_duration(duration)
-            txt_bg = txt_bg.with_opacity(0.6).with_position("center")
-
-            slide_clip = CompositeVideoClip([base, txt_bg, txt], size=(1080, 1920))
-        except Exception as e:
-            st.warning(f"Problemă la text slide {i}: {e}")
-            slide_clip = base
-
-        clips.append(slide_clip)
-
-    final = concatenate_videoclips(clips, method="compose")
-    output = "viral_video.mp4"
-    final.write_videofile(output, fps=24, codec="libx264", audio=False)
-    return output
+pexels_key = os.getenv("PEXELS_API_KEY")
 
 if not groq_key or not pexels_key:
-    st.error("⚠️ Lipsesc cheile API in Railway Variables (GROQ_API_KEY / PEXELS_API_KEY)!")
+    st.error("⚠️ Lipsesc cheile API! Verifică Variables în Railway (GROQ_API_KEY / PEXELS_API_KEY).")
     st.stop()
 
 # --- 🧠 PROMPT SEO ---
@@ -73,16 +30,18 @@ Slides must have SHOCKING, SHORT text (max 6 words).
 Format: {"title": "...", "slides": [{"text": "...", "image_query": "..."}], "posts": {"instagram": "..."}}"""
 
 
-# --- ⚙️ LOGICA ---
+# --- ⚙️ FUNCȚII LOGICE ---
 
 def get_image(query):
     url = f"https://api.pexels.com/v1/search?query={query}&per_page=1&orientation=portrait"
     headers = {"Authorization": pexels_key}
     try:
         r = requests.get(url, headers=headers, timeout=10).json()
-        return r['photos'][0]['src']['large'] if r.get('photos') else None
+        if r.get('photos'):
+            return r['photos'][0]['src']['large']
     except:
         return None
+    return None
 
 
 def create_viral_video(slides, duration):
@@ -90,80 +49,91 @@ def create_viral_video(slides, duration):
     for i, slide in enumerate(slides):
         img_url = get_image(slide['image_query'])
 
-        # Fundal negru 1080x1920
+        # Fundal negru standard 1080x1920
         bg = ColorClip(size=(1080, 1920), color=(0, 0, 0)).with_duration(duration)
 
         if img_url:
             img_data = requests.get(img_url).content
-            temp_file = f"temp_{i}.jpg"
-            with open(temp_file, "wb") as f:
+            temp_name = f"temp_{i}.jpg"
+            with open(temp_name, "wb") as f:
                 f.write(img_data)
-
-            # Folosim resized() și with_position() conform v2.0
-            img_clip = ImageClip(temp_file).with_duration(duration).resized(width=1080).with_position("center")
+            # MoviePy 2.0: resized() și with_position()
+            img_clip = ImageClip(temp_name).with_duration(duration).resized(width=1080).with_position("center")
             base = CompositeVideoClip([bg, img_clip])
         else:
             base = bg
 
-        # Text Overlay
+        # Text Overlay Stil Profesional
         try:
             txt = TextClip(
                 text=slide['text'],
-                font_size=70,
+                font_size=75,
                 color='white',
                 method='caption',
-                size=(900, None),
-                font="Arial-Bold"  # Railway are fonturi standard de sistem
+                size=(900, None)
             ).with_duration(duration).with_position("center")
 
+            # Fundal negru pentru text (lizibilitate)
             txt_bg = ColorClip(size=(txt.w + 40, txt.h + 40), color=(0, 0, 0)).with_duration(duration)
             txt_bg = txt_bg.with_opacity(0.6).with_position("center")
 
             slide_clip = CompositeVideoClip([base, txt_bg, txt], size=(1080, 1920))
-        except Exception as e:
-            st.warning(f"Problemă la text slide {i}: {e}")
+        except:
             slide_clip = base
 
         clips.append(slide_clip)
 
     final = concatenate_videoclips(clips, method="compose")
-    output = "viral_video.mp4"
+    output = "viral_history_video.mp4"
     final.write_videofile(output, fps=24, codec="libx264", audio=False)
     return output
 
 
-# --- 🚀 UI CONTROLS ---
-topic = st.text_input("Subiect istoric:", placeholder="Ex: Scufundarea Titanicului")
-format_v = st.radio("Viteză:", ["⚡ Rapid (2s)", "🎥 Poveste (4s)"])
+def cleanup():
+    for f in glob.glob("temp_*.jpg"):
+        try:
+            os.remove(f)
+        except:
+            pass
+
+
+# --- 🚀 INTERFAȚA DE CONTROL ---
+topic = st.text_input("Subiect istoric:", placeholder="Ex: Blestemul lui Tutankhamon")
+format_v = st.radio("Viteză Slide-uri:", ["⚡ Rapid (2s)", "🎥 Poveste (4s)"])
 dur = 2 if "Rapid" in format_v else 4
 
-if st.button("🔥 GENEREAZĂ"):
+if st.button("🔥 GENEREAZĂ CLIPUL"):
     if topic:
         try:
-            # 1. Groq Content
-            res = requests.post(
-                "https://api.groq.com/openai/v1/chat/completions",
-                headers={"Authorization": f"Bearer {groq_key}"},
-                json={
-                    "model": "llama-3.3-70b-versatile",
-                    "messages": [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": topic}],
-                    "response_format": {"type": "json_object"}
-                }
-            ).json()
-            data = json.loads(res['choices'][0]['message']['content'])
+            cleanup()
+            # 1. Generare Script via Groq
+            with st.spinner("🧠 Llama 3.3 concepe scriptul viral..."):
+                res = requests.post(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {groq_key}"},
+                    json={
+                        "model": "llama-3.3-70b-versatile",
+                        "messages": [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": topic}],
+                        "response_format": {"type": "json_object"}
+                    }
+                ).json()
+                data = json.loads(res['choices'][0]['message']['content'])
 
-            # 2. Video
-            with st.spinner("Randăm clipul..."):
+            # 2. Generare Video
+            with st.spinner("🎬 Randăm video-ul (Pexels + MoviePy)..."):
                 path = create_viral_video(data['slides'], dur)
                 st.video(path)
                 with open(path, "rb") as f:
-                    st.download_button("📥 DESCARCĂ", f, "video.mp4")
+                    st.download_button("📥 DESCARCĂ VIDEO", f, "viral_video.mp4", "video/mp4")
 
             # 3. SEO
-            st.subheader("📱 Instagram SEO")
-            st.code(data['posts'].get('instagram', 'Generând...'))
+            st.markdown("---")
+            st.subheader("📱 Instagram/TikTok SEO")
+            st.code(data['posts'].get('instagram', 'Descriere indisponibilă'), language=None)
 
+            cleanup()
         except Exception as e:
-            st.error(f"Eroare: {e}")
+            st.error(f"❌ Eroare: {e}")
+            cleanup()
     else:
-        st.warning("Introdu un subiect!")
+        st.warning("Te rog introdu un subiect!")
