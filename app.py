@@ -98,8 +98,9 @@ JSON structure:
 }
 
 RULES:
-- Slides: 4-6 slides for slideshow, 5-8 for video format
-- Total video duration: 30-60 seconds (sweet spot for algorithm)
+- Slides: 6-8 slides for slideshow, 8-10 for video format
+- Each slide duration_sec should be 8-10 seconds
+- Total video duration: 60-90 seconds (sweet spot for algorithm)
 - TikTok description: MUST be under 3000 characters total, EXACTLY 5 hashtags
 - Hashtags must be currently trending + niche relevant (mix of 100K-1M and 1M-100M usage)
 - Hook must create a CURIOSITY GAP - never give the answer in the hook
@@ -111,13 +112,14 @@ RULES:
 def generate_content(topic: str, format_type: str) -> dict:
     """Generate all social media content from a topic."""
     today = datetime.date.today().strftime("%B %d")
-    slide_count = "4-6" if format_type == "Slideshow" else "5-8"
+    slide_count = "6-8" if format_type == "Slideshow" else "8-10"
 
     user_prompt = f"""Today is {today}. Create viral content about: {topic}
 
-Format: {format_type} ({slide_count} slides)
+Format: {format_type} ({slide_count} slides, each slide 8-10 seconds, total 60-90 seconds)
 Make it absolutely VIRAL. The hook should be impossible to scroll past.
-Remember: TikTok description MUST be under 3000 chars with EXACTLY 5 hashtags."""
+Remember: TikTok description MUST be under 3000 chars with EXACTLY 5 hashtags.
+IMPORTANT: Each slide's image_search must be a simple, specific query (2-4 words) that will find real photos. Use terms like 'portrait', 'photograph', 'historical photo'. Example: 'Pope John Paul portrait' NOT 'Pope John Paul II waving from the Vatican balcony'."""
 
     return call_groq(SYSTEM_PROMPT, user_prompt)
 
@@ -126,56 +128,82 @@ Remember: TikTok description MUST be under 3000 chars with EXACTLY 5 hashtags.""
 # IMAGE HELPERS
 # ═══════════════════════════════════════════════════════════════
 def download_image(query: str, idx: int = 0) -> Image.Image:
-    """Try to fetch a relevant image from Wikimedia Commons, fallback to gradient."""
+    """Fetch image from Wikimedia Commons with multiple search strategies."""
+
+    search_queries = [
+        query,
+        " ".join(query.split()[:3]),  # first 3 words
+        " ".join(query.split()[:2]),  # first 2 words
+    ]
+
+    for sq in search_queries:
+        img = _try_wikimedia(sq)
+        if img:
+            return img
+
+    # Fallback: visible styled background with color
+    return create_gradient_bg(idx)
+
+
+def _try_wikimedia(query: str) -> Image.Image | None:
+    """Try Wikimedia Commons API for an image."""
     try:
         url = "https://commons.wikimedia.org/w/api.php"
         params = {
             "action": "query",
             "generator": "search",
             "gsrsearch": f"File: {query}",
-            "gsrlimit": "3",
+            "gsrlimit": "5",
             "prop": "imageinfo",
-            "iiprop": "url|mime",
-            "iiurlwidth": "1080",
+            "iiprop": "url|mime|size",
+            "iiurlwidth": "1200",
             "format": "json",
         }
-        resp = requests.get(url, params=params, timeout=10)
+        resp = requests.get(url, params=params, timeout=8)
         data = resp.json()
         pages = data.get("query", {}).get("pages", {})
 
         for page_id, page in pages.items():
             info = page.get("imageinfo", [{}])[0]
             mime = info.get("mime", "")
-            if "image" in mime and "svg" not in mime:
+            width = info.get("width", 0)
+            # Only use actual photos, skip tiny images and SVGs
+            if "image" in mime and "svg" not in mime and width >= 400:
                 img_url = info.get("thumburl") or info.get("url")
                 if img_url:
-                    img_resp = requests.get(img_url, timeout=10)
-                    img = Image.open(BytesIO(img_resp.content)).convert("RGB")
-                    return img
+                    img_resp = requests.get(img_url, timeout=8)
+                    if img_resp.status_code == 200 and len(img_resp.content) > 5000:
+                        img = Image.open(BytesIO(img_resp.content)).convert("RGB")
+                        # Verify it's not a tiny/blank image
+                        if img.size[0] >= 200 and img.size[1] >= 200:
+                            return img
     except Exception:
         pass
-
-    # Fallback: dramatic gradient
-    return create_gradient_bg(idx)
+    return None
 
 
 def create_gradient_bg(idx: int = 0) -> Image.Image:
-    """Create a cinematic gradient background."""
+    """Create a visible, cinematic gradient background — NOT black."""
     palettes = [
-        [(15, 12, 8), (45, 25, 12)],
-        [(8, 15, 25), (12, 30, 50)],
-        [(20, 8, 8), (50, 15, 15)],
-        [(8, 18, 12), (15, 40, 25)],
-        [(18, 10, 25), (35, 18, 50)],
-        [(20, 18, 10), (50, 42, 15)],
+        [(45, 30, 20), (120, 60, 30)],      # warm bronze
+        [(20, 35, 60), (50, 90, 140)],       # deep blue
+        [(50, 20, 20), (130, 40, 40)],       # crimson
+        [(20, 45, 35), (40, 110, 70)],       # forest green
+        [(40, 25, 55), (100, 50, 130)],      # royal purple
+        [(55, 45, 20), (140, 110, 40)],      # golden
+        [(30, 30, 40), (80, 80, 120)],       # slate
+        [(50, 25, 10), (130, 70, 30)],       # copper
     ]
     c1, c2 = palettes[idx % len(palettes)]
     img = Image.new("RGB", (VIDEO_W, VIDEO_H))
     draw = ImageDraw.Draw(img)
     for y in range(VIDEO_H):
-        r = int(c1[0] + (c2[0] - c1[0]) * y / VIDEO_H)
-        g = int(c1[1] + (c2[1] - c1[1]) * y / VIDEO_H)
-        b = int(c1[2] + (c2[2] - c1[2]) * y / VIDEO_H)
+        t = y / VIDEO_H
+        # Add slight curve for more dramatic gradient
+        t = t * t * (3 - 2 * t)  # smoothstep
+        r = int(c1[0] + (c2[0] - c1[0]) * t)
+        g = int(c1[1] + (c2[1] - c1[1]) * t)
+        b = int(c1[2] + (c2[2] - c1[2]) * t)
         draw.line([(0, y), (VIDEO_W, y)], fill=(r, g, b))
     return img
 
@@ -279,7 +307,7 @@ def create_slideshow(slides: list, title: str) -> str:
         # Get background image
         bg_img = download_image(slide.get("image_search", title), i)
         bg_img = bg_img.resize((VIDEO_W, VIDEO_H), Image.LANCZOS)
-        bg_img = add_darkening_overlay(bg_img, 0.5)
+        bg_img = add_darkening_overlay(bg_img, 0.3)
         bg_img = add_vignette(bg_img)
 
         # Add text
@@ -339,31 +367,16 @@ def create_video_clip(slides: list, title: str, uploaded_clips: list = None) -> 
     clips = []
 
     for i, slide in enumerate(slides):
-        duration = slide.get("duration_sec", 5)
+        duration = slide.get("duration_sec", 8)
         text = slide.get("text_overlay", "")
 
-        # Use uploaded clip if available, else create image-based slide
-        if uploaded_clips and i < len(uploaded_clips) and uploaded_clips[i] is not None:
-            try:
-                base_clip = VideoFileClip(uploaded_clips[i]).subclipped(0, min(duration, VideoFileClip(uploaded_clips[i]).duration))
-                base_clip = base_clip.resized(height=VIDEO_H).cropped(
-                    x_center=base_clip.w // 2, width=VIDEO_W
-                )
-            except Exception:
-                bg_img = download_image(slide.get("image_search", title), i)
-                bg_img = bg_img.resize((VIDEO_W, VIDEO_H), Image.LANCZOS)
-                bg_img = add_darkening_overlay(bg_img, 0.5)
-                frame_path = str(OUTPUT_DIR / f"vframe_{i}.png")
-                bg_img.save(frame_path)
-                base_clip = ImageClip(frame_path).with_duration(duration)
-        else:
-            bg_img = download_image(slide.get("image_search", title), i)
-            bg_img = bg_img.resize((VIDEO_W, VIDEO_H), Image.LANCZOS)
-            bg_img = add_darkening_overlay(bg_img, 0.5)
-            bg_img = add_vignette(bg_img)
-            frame_path = str(OUTPUT_DIR / f"vframe_{i}.png")
-            bg_img.save(frame_path)
-            base_clip = ImageClip(frame_path).with_duration(duration)
+        bg_img = download_image(slide.get("image_search", title), i)
+        bg_img = bg_img.resize((VIDEO_W, VIDEO_H), Image.LANCZOS)
+        bg_img = add_darkening_overlay(bg_img, 0.3)
+        bg_img = add_vignette(bg_img)
+        frame_path = str(OUTPUT_DIR / f"vframe_{i}.png")
+        bg_img.save(frame_path)
+        base_clip = ImageClip(frame_path).with_duration(duration)
 
         clips.append(base_clip)
 
