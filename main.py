@@ -1,14 +1,15 @@
 import os
 import sys
 
-# --- 🛡️ SHIELD: PATCH-URI OBLIGATORII PENTRU RAILWAY & PYTHON 3.12 ---
-try:
-    import PIL.Image
+# --- PATCH EXTREM PENTRU PILLOW ---
+import PIL
+import PIL.Image
 
-    if not hasattr(PIL.Image, 'ANTIALIAS'):
-        PIL.Image.ANTIALIAS = getattr(PIL.Image, 'LANCZOS', 1)
-except ImportError:
-    pass
+if not hasattr(PIL.Image, 'ANTIALIAS'):
+    try:
+        PIL.Image.ANTIALIAS = PIL.Image.Resampling.LANCZOS
+    except AttributeError:
+        PIL.Image.ANTIALIAS = 1
 
 try:
     import setuptools
