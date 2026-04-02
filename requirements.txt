@@ -6,4 +6,4 @@ imageio-ffmpeg>=0.4.9
 decorator>=4.0.2,<5.0
 proglog==0.1.10
 setuptools
-Pillow==9.5.0
+Pillow

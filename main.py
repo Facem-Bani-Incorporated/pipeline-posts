@@ -1,30 +1,32 @@
 import os
 import sys
 
-# --- PATCH EXTREM PENTRU PILLOW ---
-import PIL
+# --- 🚀 SUPER-PATCH PENTRU PILLOW & MOVIEPY ---
 import PIL.Image
-
+# Dacă Pillow e versiune nouă (10+), ANTIALIAS lipsește. Îl mapăm la LANCZOS.
 if not hasattr(PIL.Image, 'ANTIALIAS'):
-    try:
-        PIL.Image.ANTIALIAS = PIL.Image.Resampling.LANCZOS
-    except AttributeError:
-        PIL.Image.ANTIALIAS = 1
+    PIL.Image.ANTIALIAS = PIL.Image.LANCZOS
 
+# Mapăm și în modulul core de simulare pentru siguranță maximă
+import PIL.ImageResampling
+try:
+    PIL.Image.ANTIALIAS = PIL.ImageResampling.LANCZOS
+except:
+    pass
+
+# Patch pentru setuptools/pkg_resources
 try:
     import setuptools
 except ImportError:
     os.system(f"{sys.executable} -m pip install setuptools")
 
+# IMPORTURILE STREAMLIT ȘI MOVIEPY VIN DUPĂ PATCH
 import streamlit as st
 import requests
 import json
 from datetime import datetime
 import glob
-
-# --- 🎬 SETĂRI MOVIEPY & IMAGEMAGICK ---
 from moviepy.config import change_settings
-
 change_settings({"IMAGEMAGICK_BINARY": "/usr/bin/convert"})
 from moviepy.editor import TextClip, ImageClip, concatenate_videoclips, ColorClip, CompositeVideoClip
 
