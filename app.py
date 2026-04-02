@@ -25,7 +25,7 @@ from moviepy import (
 # ═══════════════════════════════════════════════════════════════
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-GROQ_MODEL = "llama-3.3-70b-versatile"
+GROQ_MODEL = "qwen/qwen3-32b"
 
 OUTPUT_DIR = Path(tempfile.mkdtemp(prefix="dailyhistory_"))
 VIDEO_W, VIDEO_H = 1080, 1920  # 9:16 vertical
@@ -52,74 +52,77 @@ def call_groq(system_prompt: str, user_prompt: str) -> dict:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            "temperature": 0.75,
-            "max_tokens": 3500,
+            "temperature": 0.6,
+            "max_completion_tokens": 8192,
+            "top_p": 0.95,
             "response_format": {"type": "json_object"},
         },
-        timeout=30,
+        timeout=60,
     )
     resp.raise_for_status()
     content = resp.json()["choices"][0]["message"]["content"]
+    # qwen3 may include <think>...</think> tags, strip them
+    content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
     return json.loads(content)
 
 
 # ═══════════════════════════════════════════════════════════════
 # CONTENT GENERATION PROMPTS
 # ═══════════════════════════════════════════════════════════════
-SYSTEM_PROMPT = """You are an elite social media content creator for DailyHistory, 
-a viral history brand. Your content gets MILLIONS of views because you:
+SYSTEM_PROMPT = """You are an elite social media content creator for DailyHistory, a viral history brand with millions of followers.
 
-1. Write HOOKS that stop the scroll instantly (first 2 seconds = everything)
-2. Use psychological triggers: curiosity gaps, contrarian takes, emotional stakes
-3. Structure for RETENTION: hook → tension → payoff → twist/CTA
-4. Know SEO inside out: trending sounds, optimal posting times, algorithm hacks
+Your job: turn a historical event into SCROLL-STOPPING content.
 
-Respond in VALID JSON only. No markdown, no backticks, no extra text.
+Respond in VALID JSON only. No markdown, no backticks, no preamble, no explanation.
 
 JSON structure:
 {
-  "title": "short punchy title for the video (max 60 chars)",
-  "hook": "the first line people see/hear - must stop the scroll (max 15 words)",
+  "title": "short punchy title (max 60 chars)",
+  "hook": "the opening line that stops the scroll (max 15 words, curiosity gap)",
   "slides": [
     {
-      "text_overlay": "bold text shown on screen (max 12 words, impactful)",
-      "narration": "what the voiceover/text says for this segment (1-2 sentences)",
-      "duration_sec": 4,
-      "image_search": "precise search query for a dramatic relevant image"
+      "text_overlay": "2-4 sentences telling THIS PART of the story. Write it like a dramatic narrator. Each slide continues the story from the previous one. The viewer should be able to read these slides and understand the FULL story. Be specific with names, dates, numbers, dramatic details.",
+      "duration_sec": 9,
+      "image_search": "simple 2-3 word image search query (e.g. 'Titanic ship' or 'Pope John Paul')"
     }
   ],
-  "tiktok_description": "EXACTLY under 3000 characters. Must include: hook line, key facts teased (not spoiled), strong CTA, then exactly 5 hashtags. Format: engaging text first, then hashtags at the end separated by spaces. The description should make people NEED to watch. Use line breaks for readability.",
-  "instagram_description": "optimized for Instagram Reels, under 2200 chars, 20-30 hashtags mixed (big + niche)",
-  "youtube_title": "YouTube Shorts title, max 100 chars, SEO keyword-rich",
-  "youtube_description": "YouTube Shorts description with keywords, 2-3 paragraphs, relevant tags",
-  "facebook_post": "Facebook post text, conversational, question-based for comments",
-  "twitter_post": "Tweet under 280 chars, provocative/surprising angle, 2-3 hashtags",
+  "tiktok_description": "A LONG, engaging description (2500-3000 characters). Structure: dramatic hook paragraph, then retell the story with fascinating details the video didn't cover, include surprising facts, end with a thought-provoking question and CTA. Then exactly 5 viral hashtags. Must feel like a mini-article that adds VALUE beyond the video.",
+  "instagram_description": "engaging caption under 2200 chars with storytelling + 25-30 hashtags (mix of big 1M+ and niche 100K-500K tags)",
+  "youtube_title": "SEO-rich YouTube Shorts title, max 100 chars, includes year and key terms",
+  "youtube_description": "3 paragraphs: story summary, historical context, CTA. Include relevant search keywords naturally.",
+  "facebook_post": "conversational, starts with a question, tells a condensed version of the story, asks for engagement in comments",
+  "twitter_post": "under 280 chars, most shocking single fact from the story, 2-3 hashtags",
   "seo_keywords": ["keyword1", "keyword2", "keyword3", "keyword4", "keyword5"]
 }
 
-RULES:
-- Slides: 6-8 slides for slideshow, 8-10 for video format
-- Each slide duration_sec should be 8-10 seconds
-- Total video duration: 60-90 seconds (sweet spot for algorithm)
-- TikTok description: MUST be under 3000 characters total, EXACTLY 5 hashtags
-- Hashtags must be currently trending + niche relevant (mix of 100K-1M and 1M-100M usage)
-- Hook must create a CURIOSITY GAP - never give the answer in the hook
-- End with a "follow for more" or controversial opinion CTA
-- All content in English
-- Think like a creator with 1M+ followers"""
+CRITICAL RULES:
+- SLIDES TEXT: Each slide's text_overlay must be 2-4 full sentences that TELL THE STORY. NOT generic titles like "A Life of Service". Write actual narrative: "On April 2, 2005, at 9:37 PM, Pope John Paul II spoke his final words: 'Let me go to the house of the Father.' Two billion people around the world watched in silence."
+- Generate 7-9 slides, each 8-10 seconds. Total: 60-90 seconds.
+- TIKTOK DESCRIPTION: Must be 2500-3000 characters. This is a mini-article, not a caption. Tell extra facts, behind-the-scenes details, things the video didn't mention. Make people save the post.
+- EXACTLY 5 hashtags on TikTok, placed at the very end.
+- image_search must be SHORT and SPECIFIC: "Titanic sinking", "Berlin Wall fall", "Moon landing 1969". Max 4 words.
+- Hook must create a CURIOSITY GAP.
+- All content in English.
+- Be DRAMATIC but FACTUALLY ACCURATE. Use real numbers, real names, real quotes when possible."""
 
 
 def generate_content(topic: str, format_type: str) -> dict:
     """Generate all social media content from a topic."""
     today = datetime.date.today().strftime("%B %d")
-    slide_count = "6-8" if format_type == "Slideshow" else "8-10"
+    slide_count = "7-9" if format_type == "Slideshow" else "8-10"
 
     user_prompt = f"""Today is {today}. Create viral content about: {topic}
 
-Format: {format_type} ({slide_count} slides, each slide 8-10 seconds, total 60-90 seconds)
-Make it absolutely VIRAL. The hook should be impossible to scroll past.
-Remember: TikTok description MUST be under 3000 chars with EXACTLY 5 hashtags.
-IMPORTANT: Each slide's image_search must be a simple, specific query (2-4 words) that will find real photos. Use terms like 'portrait', 'photograph', 'historical photo'. Example: 'Pope John Paul portrait' NOT 'Pope John Paul II waving from the Vatican balcony'."""
+Format: {format_type} ({slide_count} slides, each 8-10 seconds, total 60-90 seconds)
+
+IMPORTANT REMINDERS:
+- Each slide text_overlay = 2-4 FULL SENTENCES telling the story. NOT titles. NOT headings. Actual dramatic narrative text.
+- TikTok description = 2500-3000 characters minimum. Write a real mini-article.
+- image_search = SHORT query, max 4 words, specific historical terms.
+- 5 hashtags on TikTok, at the very end.
+
+DO NOT write generic slide text like "A Life of Service" or "Remembering a Legend". 
+WRITE the actual story: specific facts, dates, names, dramatic moments, quotes."""
 
     return call_groq(SYSTEM_PROMPT, user_prompt)
 
@@ -215,6 +218,7 @@ def add_text_to_image(
     font_size: int = 64,
     color: str = "white",
     shadow: bool = True,
+    text_bg: bool = False,
 ) -> Image.Image:
     """Add styled text overlay to an image."""
     img = img.copy().resize((VIDEO_W, VIDEO_H), Image.LANCZOS)
@@ -237,10 +241,10 @@ def add_text_to_image(
     if font is None:
         font = ImageFont.load_default()
 
-    # Word wrap
-    max_chars = max(18, VIDEO_W // (font_size // 2 + 2))
+    # Word wrap — wider for smaller fonts
+    max_chars = max(20, int(VIDEO_W / (font_size * 0.52)))
     lines = textwrap.wrap(text, width=max_chars)
-    line_height = font_size + 12
+    line_height = int(font_size * 1.35)
 
     total_h = len(lines) * line_height
     if position == "center":
@@ -250,16 +254,35 @@ def add_text_to_image(
     else:
         start_y = VIDEO_H - total_h - 180
 
+    # Optional semi-transparent background behind text
+    if text_bg and lines:
+        padding = 40
+        bg_top = start_y - padding
+        bg_bottom = start_y + total_h + padding
+        bg_overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+        bg_draw = ImageDraw.Draw(bg_overlay)
+        bg_draw.rounded_rectangle(
+            [60, bg_top, VIDEO_W - 60, bg_bottom],
+            radius=20,
+            fill=(0, 0, 0, 160),
+        )
+        img = img.convert("RGBA")
+        img = Image.alpha_composite(img, bg_overlay)
+        img = img.convert("RGB")
+        draw = ImageDraw.Draw(img)
+
     for i, line in enumerate(lines):
         bbox = draw.textbbox((0, 0), line, font=font)
         tw = bbox[2] - bbox[0]
         x = (VIDEO_W - tw) // 2
         y = start_y + i * line_height
 
-        # Shadow / outline
+        # Shadow / outline for readability
         if shadow:
-            for ox in range(-3, 4):
-                for oy in range(-3, 4):
+            for ox in range(-2, 3):
+                for oy in range(-2, 3):
+                    if ox == 0 and oy == 0:
+                        continue
                     draw.text((x + ox, y + oy), line, font=font, fill=(0, 0, 0))
 
         draw.text((x, y), line, font=font, fill=color)
@@ -301,17 +324,19 @@ def create_slideshow(slides: list, title: str) -> str:
     clips = []
 
     for i, slide in enumerate(slides):
-        duration = slide.get("duration_sec", 5)
+        duration = slide.get("duration_sec", 9)
         text = slide.get("text_overlay", "")
 
         # Get background image
         bg_img = download_image(slide.get("image_search", title), i)
         bg_img = bg_img.resize((VIDEO_W, VIDEO_H), Image.LANCZOS)
-        bg_img = add_darkening_overlay(bg_img, 0.3)
+        bg_img = add_darkening_overlay(bg_img, 0.25)
         bg_img = add_vignette(bg_img)
 
-        # Add text
-        final_img = add_text_to_image(bg_img, text, position="center", font_size=72)
+        # Add story text with semi-transparent background
+        final_img = add_text_to_image(
+            bg_img, text, position="center", font_size=44, text_bg=True
+        )
 
         # Add DailyHistory watermark
         final_img = add_text_to_image(
