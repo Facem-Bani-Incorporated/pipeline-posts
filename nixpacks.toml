@@ -1,5 +1,0 @@
-[phases.setup]
-aptPkgs = ["ffmpeg", "fonts-dejavu-core", "fonts-liberation"]
-
-[start]
-cmd = "python app.py"
