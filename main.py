@@ -1,184 +1,206 @@
+import os
 import sys
+
+# --- 🛡️ SHIELD: PATCH-URI OBLIGATORII PENTRU RAILWAY & PYTHON 3.12 ---
+try:
+    import PIL.Image
+
+    if not hasattr(PIL.Image, 'ANTIALIAS'):
+        PIL.Image.ANTIALIAS = getattr(PIL.Image, 'LANCZOS', 1)
+except ImportError:
+    pass
+
 try:
     import setuptools
 except ImportError:
-    import os
-    os.system("pip install setuptools")
+    os.system(f"{sys.executable} -m pip install setuptools")
+
 import streamlit as st
 import requests
-import os
 import json
 from datetime import datetime
-from moviepy.editor import TextClip, ImageClip, concatenate_videoclips, ColorClip, CompositeVideoClip
-import glob  # Pentru curățenie
-from moviepy.config import change_settings
-change_settings({"IMAGEMAGICK_BINARY": "/usr/bin/convert"})
-# --- CONFIGURARE INTERFAȚĂ ---
-st.set_page_config(page_title="DailyHistory Full-Auto", page_icon="🎬", layout="centered")
-st.title("👑 DailyHistory Full-Auto Video Engine")
+import glob
 
-# --- VERIFICARE CHEI API (Din Railway Variables) ---
+# --- 🎬 SETĂRI MOVIEPY & IMAGEMAGICK ---
+from moviepy.config import change_settings
+
+change_settings({"IMAGEMAGICK_BINARY": "/usr/bin/convert"})
+from moviepy.editor import TextClip, ImageClip, concatenate_videoclips, ColorClip, CompositeVideoClip
+
+# --- 👑 UI: CONFIGURARE INTERFAȚĂ ---
+st.set_page_config(page_title="DailyHistory Viral Engine", page_icon="🔥", layout="centered")
+st.title("👑 DailyHistory Viral Engine")
+st.markdown("Generare automată de clipuri 9:16 cu subtitrări profesionale și descrieri SEO perfecte.")
+
+# --- 🔑 VERIFICARE CHEI API ---
 groq_key = os.getenv("GROQ_API_KEY")
 pexels_key = os.getenv("PEXELS_API_KEY")
 
 if not groq_key or not pexels_key:
-    st.error("⚠️ Lipsesc cheile API in Railway! Ai nevoie de GROQ_API_KEY si PEXELS_API_KEY in tab-ul Variables.")
+    st.error("⚠️ Lipsesc cheile API! Asigură-te că ai GROQ_API_KEY și PEXELS_API_KEY în Variables pe Railway.")
     st.stop()
 
-# --- PROMPTUL PENTRU VIRALITATE (SEO & Structură) ---
-SYSTEM_PROMPT = """You are an elite social media strategist for "DailyHistory". Your goal is MAXIMIZING VIEWS, PROFIT, and ENGAGEMENT.
-Given a historical event, generate highly viral content. Respond strictly in VALID JSON format.
+# --- 🧠 CREIERUL SEO & RETENȚIE ---
+SYSTEM_PROMPT = """You are a top-tier social media strategist and video producer. Your goal is MAXIMIZING VIEWS, RETENTION, and ENGAGEMENT.
+Given a historical event, generate a highly viral short-form video concept. 
 
+RULES FOR SLIDES (CRITICAL):
+- 'text' must be PUNCHY and SHORT (Max 5-8 words per slide). People swipe if there's too much text!
+- Make the text sound like a dramatic hook or shocking fact.
+
+Respond strictly in VALID JSON format:
 {
-  "title": "Short, extremely clickbaity title",
-  "script": "Narration script (30-60s). Must start with a massive HOOK (e.g., 'They lied to you about...'). Keep sentences punchy.",
+  "title": "Extremely clickbaity title",
   "slides": [
-    {"time": "0-3s", "text": "Viral Hook Overlay", "image_query": "high contrast dramatic image search term"}
+    {"text": "They lied to you...", "image_query": "dark mysterious historical background"},
+    {"text": "In 1912, the unthinkable happened.", "image_query": "ocean disaster dramatic"},
+    {"text": "But the real secret...", "image_query": "secret documents classified"}
   ],
   "posts": {
-    "tiktok": "Engaging caption with a call to action + top trending SEO hashtags for the algorithm.",
-    "instagram": "Aesthetic caption focusing on storytelling + explore page optimized hashtags.",
-    "youtube": "Clickable title + heavy keyword-rich description for YouTube Search.",
-    "facebook": "Conversational post designed to trigger comments.",
-    "twitter": "Controversial or mind-blowing hook thread starter under 280 chars."
+    "instagram": "Incredible hook + short storytelling + CTA (Save this!) + top explore page hashtags.",
+    "tiktok": "Engaging caption + trending SEO hashtags for algorithm.",
+    "youtube": "Title + keyword-rich description for YouTube Shorts search."
   }
 }"""
 
 
-# --- FUNCȚII PENTRU API-URI ---
+# --- ⚙️ FUNCȚII GENERARE ---
 
 def generate_groq_content(topic, api_key):
-    """Cere de la Groq scriptul și postările SEO"""
     today = datetime.now().strftime("%B %d")
     url = "https://api.groq.com/openai/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
-    }
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     payload = {
         "model": "llama-3.3-70b-versatile",
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": f"Today is {today}. Create extremely viral content about: {topic}"}
+            {"role": "user", "content": f"Today is {today}. Create a viral short video about: {topic}"}
         ],
         "temperature": 0.8,
         "response_format": {"type": "json_object"}
     }
-
-    try:
-        response = requests.post(url, headers=headers, json=payload, timeout=30)
-        response.raise_for_status()
-        return json.loads(response.json()["choices"][0]["message"]["content"])
-    except Exception as e:
-        raise Exception(f"Eroare la apelul Groq: {e}")
+    response = requests.post(url, headers=headers, json=payload, timeout=30)
+    response.raise_for_status()
+    return json.loads(response.json()["choices"][0]["message"]["content"])
 
 
 def get_image_url(query, pexels_key):
-    """Caută o imagine relevantă pe Pexels (Verticală 9:16)"""
-    # Adăugăm "vertical" la căutare pentru a obține imagini bune de TikTok
     url = f"https://api.pexels.com/v1/search?query={query}&per_page=1&orientation=portrait"
     headers = {"Authorization": pexels_key}
-
     try:
         r = requests.get(url, headers=headers, timeout=10)
-        r.raise_for_status()
         data = r.json()
-        if data['photos']:
+        if data.get('photos'):
             return data['photos'][0]['src']['large']
     except:
-        pass  # Dacă pică căutarea, punem fundal negru
+        return None
     return None
 
 
-# --- FUNCȚIA PENTRU GENERARE VIDEO (Optimizată pentru Cloud) ---
-
-def create_video(slides, output_filename="video_final.mp4"):
-    """Generează videoclipul vertical 9:16 din slide-uri"""
+def create_video(slides, duration_per_slide, output_filename="video_final.mp4"):
     clips = []
 
     for i, slide in enumerate(slides):
         img_url = get_image_url(slide['image_query'], pexels_key)
 
-        # 1. Creează fundalul (poza sau negru)
+        # 1. Background Video/Image (1080x1920 fix pentru a nu crăpa)
+        bg_black = ColorClip(size=(1080, 1920), color=(0, 0, 0)).set_duration(duration_per_slide)
+
         if img_url:
             resp = requests.get(img_url, timeout=20)
-            temp_img_name = f"temp_img_{i}.jpg"
-            with open(temp_img_name, "wb") as f:
+            temp_img = f"temp_img_{i}.jpg"
+            with open(temp_img, "wb") as f:
                 f.write(resp.content)
-            # Resize și Crop pentru a umple formatul 1080x1920
-            bg = ImageClip(temp_img_name).set_duration(4).resize(height=1920).set_position('center')
+            # Punem poza peste fundalul negru, centrată
+            img_clip = ImageClip(temp_img).set_duration(duration_per_slide).resize(width=1080).set_position('center')
+            base_bg = CompositeVideoClip([bg_black, img_clip])
         else:
-            bg = ColorClip(size=(1080, 1920), color=(0, 0, 0)).set_duration(4)
+            base_bg = bg_black
 
-        # 2. Adaugă textul overlay
-        # NOTA: Folosim o setare specifică pentru Cloud ca să nu crape dacă lipsește ImageMagick full
+        # 2. Text Overlay Profesional (Uriaș, Centrat, Alb, Bold)
         try:
-            txt = TextClip(slide['text'], fontsize=80, color='white', font='Arial-Bold',
-                           method='caption', size=(900, None), align='center').set_duration(4).set_position('center')
-            video_slide = CompositeVideoClip([bg, txt], size=(1080, 1920))
+            # Creăm textul efectiv
+            txt_clip = TextClip(slide['text'], fontsize=85, color='white', font='Arial-Bold',
+                                method='caption', size=(900, None), align='center')
+            txt_clip = txt_clip.set_duration(duration_per_slide).set_position('center')
+
+            # Creăm un fundal negru semi-transparent fix pe mărimea textului + puțin padding
+            txt_bg = ColorClip(size=(txt_clip.w + 60, txt_clip.h + 40), color=(0, 0, 0))
+            txt_bg = txt_bg.set_opacity(0.6).set_duration(duration_per_slide).set_position('center')
+
+            # Compunem slide-ul final: Poza -> Cutie Neagră Transparentă -> Text
+            video_slide = CompositeVideoClip([base_bg, txt_bg, txt_clip], size=(1080, 1920))
         except:
-            # Plan B: Dacă textul e o problemă, punem doar poza
-            st.warning(f"Atenție: Nu am putut pune text pe slide-ul {i + 1}. Am folosit doar poza.")
-            video_slide = CompositeVideoClip([bg], size=(1080, 1920))
+            # Fallback dacă pică TextClip
+            video_slide = base_bg
 
         clips.append(video_slide)
 
-    # 3. Compilează video-ul final
-    with st.spinner("💥 Compilăm fișierul video final mp4..."):
-        final_video = concatenate_videoclips(clips, method="compose")
-        final_video.write_videofile(output_filename, fps=24, codec="libx264", audio=False)  # audio=False momentan
-
+    final_video = concatenate_videoclips(clips, method="compose")
+    final_video.write_videofile(output_filename, fps=24, codec="libx264", audio=False)
     return output_filename
 
 
 def cleanup():
-    """Șterge fișierele temporare pentru scalare curată"""
     for f in glob.glob("temp_img_*.jpg"):
-        os.remove(f)
+        try:
+            os.remove(f)
+        except:
+            pass
 
 
-# --- LOGICA DE RULARE ÎN UI ---
+# --- 🚀 ZONA DE COMANDĂ ---
+st.subheader("1. Ce subiect atacăm azi?")
+topic = st.text_input("Subiectul istoric:", placeholder="Ex: Căderea Imperiului Roman, Misterul Piramidelor, etc.")
 
-topic = st.text_input("Ce s-a întâmplat azi în istorie?", placeholder="Ex: Prima aselenizare, 1969")
+st.subheader("2. Alege Formatul Clipului")
+format_video = st.radio(
+    "Cum vrei să se miște clipul?",
+    ("⚡ Slideshow Rapid - Stil TikTok (2 secunde/slide)",
+     "🎥 Documentar Poveste - Stil YouTube Shorts (4 secunde/slide)")
+)
+slide_duration = 2 if "Rapid" in format_video else 4
 
-if st.button("🚀 GENEREAZĂ TOTUL: VIDEO & POSTĂRI"):
+if st.button("🔥 GENEREAZĂ CLIPUL & SEO PERFECT 🔥", use_container_width=True):
     if not topic:
-        st.warning("Te rog scrie un topic!")
+        st.error("❗ Scrie un subiect istoric mai întâi!")
     else:
         try:
-            # Cleanup preventiv
             cleanup()
 
-            # 1. Groq Generare
-            with st.spinner("1/3 Creierul Groq Llama 3.3 scrie scriptul viral..."):
+            # PASUL 1
+            with st.spinner(f"🧠 Llama 3.3 scrie scriptul viral pentru '{topic}'..."):
                 result = generate_groq_content(topic, groq_key)
 
-            # 2. MoviePy Generare
-            with st.spinner("2/3 Creăm videoclipul (slideshow vertical + text)..."):
-                video_path = create_video(result['slides'])
+            # PASUL 2
+            with st.spinner("🎬 Randăm clipul profesional (Aplicăm filtre, text, poziționare)..."):
+                video_path = create_video(result['slides'], slide_duration)
 
-                # Afișăm video-ul în interfață
+                st.success("✅ Clipul tău viral este GATA!")
+
+                # Afișare Video + Buton Uriaș de Download
                 st.video(video_path)
-
-                # Buton de download pentru video
                 with open(video_path, "rb") as file:
-                    st.download_button(label="📥 DESCARCĂ VIDEO GATA DE POSTARE",
-                                       data=file, file_name="history_video.mp4", mime="video/mp4")
+                    st.download_button(
+                        label="📥 DESCARCĂ CLIPUL (.MP4)",
+                        data=file,
+                        file_name=f"Viral_History_{topic[:10].replace(' ', '_')}.mp4",
+                        mime="video/mp4",
+                        use_container_width=True
+                    )
 
-            # 3. Afișare Postări SEO
-            with st.spinner("3/3 Pregătim caption-urile SEO..."):
-                st.markdown("---")
-                st.subheader("📱 Caption-uri Gata de Copy-Paste")
-                platforms = result.get("posts", {})
-                if platforms:
-                    tabs = st.tabs(list(platforms.keys()))
-                    for idx, (platform_name, post_text) in enumerate(platforms.items()):
-                        with tabs[idx]:
-                            st.code(post_text, language=None)
+            # PASUL 3
+            st.markdown("---")
+            st.subheader("📈 Descrierile SEO & Hashtag-uri (Gata de Copy-Paste)")
+            st.info(
+                "Algoritmul a generat textele de mai jos pentru a maximiza algoritmul de căutare (SEO) pe fiecare platformă.")
 
-            # Cleanup final
+            tabs = st.tabs(list(result['posts'].keys()))
+            for idx, (plat, txt) in enumerate(result['posts'].items()):
+                with tabs[idx]:
+                    st.code(txt, language=None)
+
             cleanup()
-
         except Exception as e:
-            st.error(f"⚠️ A apărut o eroare neașteptată: {e}")
+            st.error(f"❌ A apărut o eroare la randare: {e}")
             cleanup()
