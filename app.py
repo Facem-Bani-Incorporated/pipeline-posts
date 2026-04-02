@@ -24,6 +24,7 @@ from moviepy import (
 # CONFIG
 # ═══════════════════════════════════════════════════════════════
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+PEXELS_API_KEY = os.environ.get("PEXELS_API_KEY", "")
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL = "qwen/qwen3-32b"
 
@@ -131,21 +132,66 @@ WRITE the actual story: specific facts, dates, names, dramatic moments, quotes."
 # IMAGE HELPERS
 # ═══════════════════════════════════════════════════════════════
 def download_image(query: str, idx: int = 0) -> Image.Image:
-    """Fetch image from Wikimedia Commons with multiple search strategies."""
+    """Fetch image: Pexels first, Wikimedia fallback, gradient last resort."""
+    api_key = PEXELS_API_KEY or os.environ.get("PEXELS_API_KEY", "")
 
     search_queries = [
         query,
-        " ".join(query.split()[:3]),  # first 3 words
-        " ".join(query.split()[:2]),  # first 2 words
+        " ".join(query.split()[:3]),
+        " ".join(query.split()[:2]),
     ]
 
+    # Try Pexels first
+    if api_key:
+        for sq in search_queries:
+            img = _try_pexels(sq, api_key)
+            if img:
+                return img
+
+    # Fallback: Wikimedia
     for sq in search_queries:
         img = _try_wikimedia(sq)
         if img:
             return img
 
-    # Fallback: visible styled background with color
     return create_gradient_bg(idx)
+
+
+def _try_pexels(query: str, api_key: str) -> Image.Image | None:
+    """Fetch a portrait-oriented image from Pexels."""
+    try:
+        resp = requests.get(
+            "https://api.pexels.com/v1/search",
+            headers={"Authorization": api_key},
+            params={
+                "query": query,
+                "per_page": 5,
+                "orientation": "portrait",
+                "size": "large",
+            },
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            return None
+
+        photos = resp.json().get("photos", [])
+        if not photos:
+            return None
+
+        # Pick the best portrait photo
+        for photo in photos:
+            src = photo.get("src", {})
+            # portrait is 800x1200, large2x is bigger
+            img_url = src.get("portrait") or src.get("large") or src.get("original")
+            if img_url:
+                img_resp = requests.get(img_url, timeout=10)
+                if img_resp.status_code == 200 and len(img_resp.content) > 10000:
+                    img = Image.open(BytesIO(img_resp.content)).convert("RGB")
+                    if img.size[0] >= 400 and img.size[1] >= 400:
+                        return img
+    except Exception:
+        pass
+    return None
 
 
 def _try_wikimedia(query: str) -> Image.Image | None:
@@ -170,14 +216,12 @@ def _try_wikimedia(query: str) -> Image.Image | None:
             info = page.get("imageinfo", [{}])[0]
             mime = info.get("mime", "")
             width = info.get("width", 0)
-            # Only use actual photos, skip tiny images and SVGs
             if "image" in mime and "svg" not in mime and width >= 400:
                 img_url = info.get("thumburl") or info.get("url")
                 if img_url:
                     img_resp = requests.get(img_url, timeout=8)
                     if img_resp.status_code == 200 and len(img_resp.content) > 5000:
                         img = Image.open(BytesIO(img_resp.content)).convert("RGB")
-                        # Verify it's not a tiny/blank image
                         if img.size[0] >= 200 and img.size[1] >= 200:
                             return img
     except Exception:
@@ -241,10 +285,11 @@ def add_text_to_image(
     if font is None:
         font = ImageFont.load_default()
 
-    # Word wrap — wider for smaller fonts
-    max_chars = max(20, int(VIDEO_W / (font_size * 0.52)))
+    # Word wrap — keep text well inside margins (80% of width)
+    usable_width = int(VIDEO_W * 0.75)
+    max_chars = max(18, int(usable_width / (font_size * 0.52)))
     lines = textwrap.wrap(text, width=max_chars)
-    line_height = int(font_size * 1.35)
+    line_height = int(font_size * 1.4)
 
     total_h = len(lines) * line_height
     if position == "center":
@@ -256,15 +301,15 @@ def add_text_to_image(
 
     # Optional semi-transparent background behind text
     if text_bg and lines:
-        padding = 40
+        padding = 50
         bg_top = start_y - padding
         bg_bottom = start_y + total_h + padding
         bg_overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
         bg_draw = ImageDraw.Draw(bg_overlay)
         bg_draw.rounded_rectangle(
-            [60, bg_top, VIDEO_W - 60, bg_bottom],
+            [100, bg_top, VIDEO_W - 100, bg_bottom],
             radius=20,
-            fill=(0, 0, 0, 160),
+            fill=(0, 0, 0, 170),
         )
         img = img.convert("RGBA")
         img = Image.alpha_composite(img, bg_overlay)
@@ -317,6 +362,49 @@ def add_vignette(img: Image.Image) -> Image.Image:
 
 
 # ═══════════════════════════════════════════════════════════════
+# BACKGROUND MUSIC
+# ═══════════════════════════════════════════════════════════════
+def create_ambient_music(duration_sec: float) -> str:
+    """Create a subtle ambient background track using pydub."""
+    try:
+        from pydub import AudioSegment
+        from pydub.generators import Sine
+        import random
+
+        # Create layered ambient pad
+        duration_ms = int(duration_sec * 1000)
+
+        # Base drone — low C note
+        base = Sine(130.81).to_audio_segment(duration=duration_ms).apply_gain(-28)
+
+        # Harmonic layer — G note
+        harmony = Sine(196.00).to_audio_segment(duration=duration_ms).apply_gain(-32)
+
+        # High shimmer — E note
+        shimmer = Sine(329.63).to_audio_segment(duration=duration_ms).apply_gain(-36)
+
+        # Sub bass
+        sub = Sine(65.41).to_audio_segment(duration=duration_ms).apply_gain(-30)
+
+        # Mix all layers
+        mix = base.overlay(harmony).overlay(shimmer).overlay(sub)
+
+        # Fade in/out for cinematic feel
+        fade_ms = min(3000, duration_ms // 4)
+        mix = mix.fade_in(fade_ms).fade_out(fade_ms)
+
+        # Overall volume down so it's background
+        mix = mix.apply_gain(-8)
+
+        music_path = str(OUTPUT_DIR / "ambient_bg.wav")
+        mix.export(music_path, format="wav")
+        return music_path
+    except Exception as e:
+        print(f"Music generation error: {e}")
+        return None
+
+
+# ═══════════════════════════════════════════════════════════════
 # VIDEO / SLIDESHOW CREATION
 # ═══════════════════════════════════════════════════════════════
 def create_slideshow(slides: list, title: str) -> str:
@@ -347,14 +435,8 @@ def create_slideshow(slides: list, title: str) -> str:
         frame_path = str(OUTPUT_DIR / f"frame_{i}.png")
         final_img.save(frame_path, quality=95)
 
-        # Create clip with subtle zoom (Ken Burns)
+        # Create clip (no zoom to keep text within safe margins)
         clip = ImageClip(frame_path).with_duration(duration)
-
-        # Gentle zoom in
-        zoom_factor = 1.08
-        clip = clip.resized(
-            lambda t: 1 + (zoom_factor - 1) * t / duration
-        )
 
         clips.append(clip)
 
@@ -369,12 +451,22 @@ def create_slideshow(slides: list, title: str) -> str:
 
     final = concatenate_videoclips(final_clips, method="compose")
 
+    # Add background music
+    total_duration = final.duration
+    music_path = create_ambient_music(total_duration)
+    if music_path:
+        try:
+            audio = AudioFileClip(music_path).with_duration(total_duration)
+            final = final.with_audio(audio)
+        except Exception as e:
+            print(f"Audio attach error: {e}")
+
     output_path = str(OUTPUT_DIR / f"dailyhistory_{datetime.date.today()}.mp4")
     final.write_videofile(
         output_path,
         fps=FPS,
         codec="libx264",
-        audio=False,
+        audio_codec="aac",
         preset="medium",
         threads=2,
         logger=None,
@@ -406,8 +498,19 @@ def create_video_clip(slides: list, title: str, uploaded_clips: list = None) -> 
         clips.append(base_clip)
 
     final = concatenate_videoclips(clips, method="compose")
+
+    # Add background music
+    total_duration = final.duration
+    music_path = create_ambient_music(total_duration)
+    if music_path:
+        try:
+            audio = AudioFileClip(music_path).with_duration(total_duration)
+            final = final.with_audio(audio)
+        except Exception as e:
+            print(f"Audio attach error: {e}")
+
     output_path = str(OUTPUT_DIR / f"dailyhistory_video_{datetime.date.today()}.mp4")
-    final.write_videofile(output_path, fps=FPS, codec="libx264", audio=False, preset="medium", threads=2, logger=None)
+    final.write_videofile(output_path, fps=FPS, codec="libx264", audio_codec="aac", preset="medium", threads=2, logger=None)
 
     for clip in clips:
         clip.close()
