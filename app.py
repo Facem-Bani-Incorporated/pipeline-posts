@@ -533,7 +533,7 @@ footer { display: none !important; }
 """
 
 def build_ui():
-    with gr.Blocks(theme=THEME, css=CSS, title="DailyHistory Pipeline") as app:
+    with gr.Blocks(title="DailyHistory Pipeline") as app:
 
         gr.Markdown("<h1 class='main-title'>DailyHistory</h1>")
         gr.Markdown("<p class='sub-title'>Content Automation Pipeline</p>")
@@ -575,11 +575,9 @@ def build_ui():
         gr.Markdown("---")
         gr.Markdown("### ③ TikTok — Copy & Post")
         tiktok_desc = gr.Textbox(
-            label="♪ TikTok Description (copy this exactly)",
+            label="♪ TikTok Description (select all + copy)",
             lines=8,
-            show_copy_button=True,
             interactive=False,
-            elem_classes=["platform-box"],
         )
         tiktok_chars = gr.Textbox(label="Character count", interactive=False)
 
@@ -590,28 +588,28 @@ def build_ui():
         with gr.Tab("Instagram"):
             ig_desc = gr.Textbox(
                 label="◻ Instagram Reels Description",
-                lines=6, show_copy_button=True, interactive=False,
+                lines=6, interactive=False,
             )
 
         with gr.Tab("YouTube Shorts"):
             yt_title = gr.Textbox(
-                label="▶ YouTube Title", show_copy_button=True, interactive=False,
+                label="▶ YouTube Title", interactive=False,
             )
             yt_desc = gr.Textbox(
                 label="▶ YouTube Description",
-                lines=5, show_copy_button=True, interactive=False,
+                lines=5, interactive=False,
             )
 
         with gr.Tab("Facebook"):
             fb_post = gr.Textbox(
                 label="f Facebook Post",
-                lines=4, show_copy_button=True, interactive=False,
+                lines=4, interactive=False,
             )
 
         with gr.Tab("X / Twitter"):
             tw_post = gr.Textbox(
                 label="𝕏 Tweet",
-                lines=3, show_copy_button=True, interactive=False,
+                lines=3, interactive=False,
             )
 
         # ── POSTING STATUS ──
@@ -658,4 +656,6 @@ if __name__ == "__main__":
         server_name="0.0.0.0",
         server_port=int(os.environ.get("PORT", 7860)),
         share=False,
+        theme=THEME,
+        css=CSS,
     )
