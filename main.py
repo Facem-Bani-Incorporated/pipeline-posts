@@ -5,7 +5,8 @@ import json
 from datetime import datetime
 from moviepy.editor import TextClip, ImageClip, concatenate_videoclips, ColorClip, CompositeVideoClip
 import glob  # Pentru curățenie
-
+from moviepy.config import change_settings
+change_settings({"IMAGEMAGICK_BINARY": "/usr/bin/convert"})
 # --- CONFIGURARE INTERFAȚĂ ---
 st.set_page_config(page_title="DailyHistory Full-Auto", page_icon="🎬", layout="centered")
 st.title("👑 DailyHistory Full-Auto Video Engine")

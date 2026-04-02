@@ -1,0 +1,8 @@
+[phases.setup]
+nixPkgs = ["python311", "imagemagick", "gcc"]
+
+[phases.install]
+cmds = ["python -m venv .venv", ".venv/bin/pip install -r requirements.txt"]
+
+[start]
+cmd = "streamlit run main.py --server.port $PORT --server.address 0.0.0.0"

@@ -1,4 +1,7 @@
-streamlit==1.32.0
-requests==2.31.0
-moviepy==1.0.3
-pexels-api-python==1.0.1
+streamlit
+requests
+moviepy
+proglog
+decorator
+imageio
+imageio-ffmpeg
