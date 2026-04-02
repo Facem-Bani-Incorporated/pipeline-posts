@@ -6,9 +6,7 @@ from datetime import datetime
 import glob
 
 # --- 🎬 IMPORTURI MODERNE MOVIEPY (v2.0+) ---
-from moviepy.video.VideoClip import TextClip, ImageClip, ColorClip
-from moviepy.video.compositing.CompositeVideoClip import CompositeVideoClip
-from moviepy.video.compositing.concatenate import concatenate_videoclips
+from moviepy import TextClip, ImageClip, ColorClip, CompositeVideoClip, concatenate_videoclips
 from moviepy.config import configure_settings
 
 # Configurare ImageMagick pentru Railway
@@ -20,7 +18,50 @@ st.title("👑 DailyHistory Viral Engine")
 
 # Verificare Chei API
 groq_key = os.getenv("GROQ_API_KEY")
-pexels_key = os.getenv("PEXELS_API_KEY")
+pexels_key = os.getenv("PEXELS_API_KEY")def create_viral_video(slides, duration):
+    clips = []
+    for i, slide in enumerate(slides):
+        img_url = get_image(slide['image_query'])
+
+        # Fundal negru 1080x1920
+        bg = ColorClip(size=(1080, 1920), color=(0, 0, 0)).with_duration(duration)
+
+        if img_url:
+            img_data = requests.get(img_url).content
+            temp_file = f"temp_{i}.jpg"
+            with open(temp_file, "wb") as f: f.write(img_data)
+
+            # Folosim resized() și with_position() conform v2.0
+            img_clip = ImageClip(temp_file).with_duration(duration).resized(width=1080).with_position("center")
+            base = CompositeVideoClip([bg, img_clip])
+        else:
+            base = bg
+
+        # Text Overlay
+        try:
+            txt = TextClip(
+                text=slide['text'],
+                font_size=70,
+                color='white',
+                method='caption',
+                size=(900, None),
+                font="Arial-Bold" # Railway are fonturi standard de sistem
+            ).with_duration(duration).with_position("center")
+
+            txt_bg = ColorClip(size=(txt.w + 40, txt.h + 40), color=(0,0,0)).with_duration(duration)
+            txt_bg = txt_bg.with_opacity(0.6).with_position("center")
+
+            slide_clip = CompositeVideoClip([base, txt_bg, txt], size=(1080, 1920))
+        except Exception as e:
+            st.warning(f"Problemă la text slide {i}: {e}")
+            slide_clip = base
+
+        clips.append(slide_clip)
+
+    final = concatenate_videoclips(clips, method="compose")
+    output = "viral_video.mp4"
+    final.write_videofile(output, fps=24, codec="libx264", audio=False)
+    return output
 
 if not groq_key or not pexels_key:
     st.error("⚠️ Lipsesc cheile API in Railway Variables (GROQ_API_KEY / PEXELS_API_KEY)!")
@@ -49,34 +90,38 @@ def create_viral_video(slides, duration):
     for i, slide in enumerate(slides):
         img_url = get_image(slide['image_query'])
 
-        # Fundal negru standard 1080x1920
-        bg = ColorClip(size=(1080, 1920), color=(0, 0, 0), duration=duration)
+        # Fundal negru 1080x1920
+        bg = ColorClip(size=(1080, 1920), color=(0, 0, 0)).with_duration(duration)
 
         if img_url:
             img_data = requests.get(img_url).content
-            with open(f"temp_{i}.jpg", "wb") as f:
+            temp_file = f"temp_{i}.jpg"
+            with open(temp_file, "wb") as f:
                 f.write(img_data)
-            img_clip = ImageClip(f"temp_{i}.jpg").with_duration(duration).resized(width=1080).with_position("center")
+
+            # Folosim resized() și with_position() conform v2.0
+            img_clip = ImageClip(temp_file).with_duration(duration).resized(width=1080).with_position("center")
             base = CompositeVideoClip([bg, img_clip])
         else:
             base = bg
 
-        # Text Overlay Stil Profesional
+        # Text Overlay
         try:
             txt = TextClip(
                 text=slide['text'],
-                font_size=80,
+                font_size=70,
                 color='white',
                 method='caption',
-                size=(900, None)
+                size=(900, None),
+                font="Arial-Bold"  # Railway are fonturi standard de sistem
             ).with_duration(duration).with_position("center")
 
-            # Fundal semi-transparent pentru text
-            txt_bg = ColorClip(size=(txt.w + 40, txt.h + 40), color=(0, 0, 0), duration=duration)
+            txt_bg = ColorClip(size=(txt.w + 40, txt.h + 40), color=(0, 0, 0)).with_duration(duration)
             txt_bg = txt_bg.with_opacity(0.6).with_position("center")
 
             slide_clip = CompositeVideoClip([base, txt_bg, txt], size=(1080, 1920))
-        except:
+        except Exception as e:
+            st.warning(f"Problemă la text slide {i}: {e}")
             slide_clip = base
 
         clips.append(slide_clip)
