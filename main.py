@@ -1,209 +1,124 @@
 import os
-import sys
-
-# --- 🚀 SUPER-PATCH PENTRU PILLOW & MOVIEPY ---
-import PIL.Image
-# Dacă Pillow e versiune nouă (10+), ANTIALIAS lipsește. Îl mapăm la LANCZOS.
-if not hasattr(PIL.Image, 'ANTIALIAS'):
-    PIL.Image.ANTIALIAS = PIL.Image.LANCZOS
-
-# Mapăm și în modulul core de simulare pentru siguranță maximă
-import PIL.ImageResampling
-try:
-    PIL.Image.ANTIALIAS = PIL.ImageResampling.LANCZOS
-except:
-    pass
-
-# Patch pentru setuptools/pkg_resources
-try:
-    import setuptools
-except ImportError:
-    os.system(f"{sys.executable} -m pip install setuptools")
-
-# IMPORTURILE STREAMLIT ȘI MOVIEPY VIN DUPĂ PATCH
 import streamlit as st
 import requests
 import json
 from datetime import datetime
 import glob
-from moviepy.config import change_settings
-change_settings({"IMAGEMAGICK_BINARY": "/usr/bin/convert"})
-from moviepy.editor import TextClip, ImageClip, concatenate_videoclips, ColorClip, CompositeVideoClip
 
-# --- 👑 UI: CONFIGURARE INTERFAȚĂ ---
+# --- 🎬 IMPORTURI MODERNE MOVIEPY (v2.0+) ---
+from moviepy.video.VideoClip import TextClip, ImageClip, ColorClip
+from moviepy.video.compositing.CompositeVideoClip import CompositeVideoClip
+from moviepy.video.compositing.concatenate import concatenate_videoclips
+from moviepy.config import configure_settings
+
+# Configurare ImageMagick pentru Railway
+configure_settings({"IMAGEMAGICK_BINARY": "/usr/bin/convert"})
+
+# --- 👑 CONFIGURARE UI ---
 st.set_page_config(page_title="DailyHistory Viral Engine", page_icon="🔥", layout="centered")
 st.title("👑 DailyHistory Viral Engine")
-st.markdown("Generare automată de clipuri 9:16 cu subtitrări profesionale și descrieri SEO perfecte.")
 
-# --- 🔑 VERIFICARE CHEI API ---
+# Verificare Chei API
 groq_key = os.getenv("GROQ_API_KEY")
 pexels_key = os.getenv("PEXELS_API_KEY")
 
 if not groq_key or not pexels_key:
-    st.error("⚠️ Lipsesc cheile API! Asigură-te că ai GROQ_API_KEY și PEXELS_API_KEY în Variables pe Railway.")
+    st.error("⚠️ Lipsesc cheile API in Railway Variables (GROQ_API_KEY / PEXELS_API_KEY)!")
     st.stop()
 
-# --- 🧠 CREIERUL SEO & RETENȚIE ---
-SYSTEM_PROMPT = """You are a top-tier social media strategist and video producer. Your goal is MAXIMIZING VIEWS, RETENTION, and ENGAGEMENT.
-Given a historical event, generate a highly viral short-form video concept. 
-
-RULES FOR SLIDES (CRITICAL):
-- 'text' must be PUNCHY and SHORT (Max 5-8 words per slide). People swipe if there's too much text!
-- Make the text sound like a dramatic hook or shocking fact.
-
-Respond strictly in VALID JSON format:
-{
-  "title": "Extremely clickbaity title",
-  "slides": [
-    {"text": "They lied to you...", "image_query": "dark mysterious historical background"},
-    {"text": "In 1912, the unthinkable happened.", "image_query": "ocean disaster dramatic"},
-    {"text": "But the real secret...", "image_query": "secret documents classified"}
-  ],
-  "posts": {
-    "instagram": "Incredible hook + short storytelling + CTA (Save this!) + top explore page hashtags.",
-    "tiktok": "Engaging caption + trending SEO hashtags for algorithm.",
-    "youtube": "Title + keyword-rich description for YouTube Shorts search."
-  }
-}"""
+# --- 🧠 PROMPT SEO ---
+SYSTEM_PROMPT = """You are a viral video strategist. Create a JSON response for a historical event.
+Slides must have SHOCKING, SHORT text (max 6 words).
+Format: {"title": "...", "slides": [{"text": "...", "image_query": "..."}], "posts": {"instagram": "..."}}"""
 
 
-# --- ⚙️ FUNCȚII GENERARE ---
+# --- ⚙️ LOGICA ---
 
-def generate_groq_content(topic, api_key):
-    today = datetime.now().strftime("%B %d")
-    url = "https://api.groq.com/openai/v1/chat/completions"
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    payload = {
-        "model": "llama-3.3-70b-versatile",
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": f"Today is {today}. Create a viral short video about: {topic}"}
-        ],
-        "temperature": 0.8,
-        "response_format": {"type": "json_object"}
-    }
-    response = requests.post(url, headers=headers, json=payload, timeout=30)
-    response.raise_for_status()
-    return json.loads(response.json()["choices"][0]["message"]["content"])
-
-
-def get_image_url(query, pexels_key):
+def get_image(query):
     url = f"https://api.pexels.com/v1/search?query={query}&per_page=1&orientation=portrait"
     headers = {"Authorization": pexels_key}
     try:
-        r = requests.get(url, headers=headers, timeout=10)
-        data = r.json()
-        if data.get('photos'):
-            return data['photos'][0]['src']['large']
+        r = requests.get(url, headers=headers, timeout=10).json()
+        return r['photos'][0]['src']['large'] if r.get('photos') else None
     except:
         return None
-    return None
 
 
-def create_video(slides, duration_per_slide, output_filename="video_final.mp4"):
+def create_viral_video(slides, duration):
     clips = []
-
     for i, slide in enumerate(slides):
-        img_url = get_image_url(slide['image_query'], pexels_key)
+        img_url = get_image(slide['image_query'])
 
-        # 1. Background Video/Image (1080x1920 fix pentru a nu crăpa)
-        bg_black = ColorClip(size=(1080, 1920), color=(0, 0, 0)).set_duration(duration_per_slide)
+        # Fundal negru standard 1080x1920
+        bg = ColorClip(size=(1080, 1920), color=(0, 0, 0), duration=duration)
 
         if img_url:
-            resp = requests.get(img_url, timeout=20)
-            temp_img = f"temp_img_{i}.jpg"
-            with open(temp_img, "wb") as f:
-                f.write(resp.content)
-            # Punem poza peste fundalul negru, centrată
-            img_clip = ImageClip(temp_img).set_duration(duration_per_slide).resize(width=1080).set_position('center')
-            base_bg = CompositeVideoClip([bg_black, img_clip])
+            img_data = requests.get(img_url).content
+            with open(f"temp_{i}.jpg", "wb") as f:
+                f.write(img_data)
+            img_clip = ImageClip(f"temp_{i}.jpg").with_duration(duration).resized(width=1080).with_position("center")
+            base = CompositeVideoClip([bg, img_clip])
         else:
-            base_bg = bg_black
+            base = bg
 
-        # 2. Text Overlay Profesional (Uriaș, Centrat, Alb, Bold)
+        # Text Overlay Stil Profesional
         try:
-            # Creăm textul efectiv
-            txt_clip = TextClip(slide['text'], fontsize=85, color='white', font='Arial-Bold',
-                                method='caption', size=(900, None), align='center')
-            txt_clip = txt_clip.set_duration(duration_per_slide).set_position('center')
+            txt = TextClip(
+                text=slide['text'],
+                font_size=80,
+                color='white',
+                method='caption',
+                size=(900, None)
+            ).with_duration(duration).with_position("center")
 
-            # Creăm un fundal negru semi-transparent fix pe mărimea textului + puțin padding
-            txt_bg = ColorClip(size=(txt_clip.w + 60, txt_clip.h + 40), color=(0, 0, 0))
-            txt_bg = txt_bg.set_opacity(0.6).set_duration(duration_per_slide).set_position('center')
+            # Fundal semi-transparent pentru text
+            txt_bg = ColorClip(size=(txt.w + 40, txt.h + 40), color=(0, 0, 0), duration=duration)
+            txt_bg = txt_bg.with_opacity(0.6).with_position("center")
 
-            # Compunem slide-ul final: Poza -> Cutie Neagră Transparentă -> Text
-            video_slide = CompositeVideoClip([base_bg, txt_bg, txt_clip], size=(1080, 1920))
+            slide_clip = CompositeVideoClip([base, txt_bg, txt], size=(1080, 1920))
         except:
-            # Fallback dacă pică TextClip
-            video_slide = base_bg
+            slide_clip = base
 
-        clips.append(video_slide)
+        clips.append(slide_clip)
 
-    final_video = concatenate_videoclips(clips, method="compose")
-    final_video.write_videofile(output_filename, fps=24, codec="libx264", audio=False)
-    return output_filename
+    final = concatenate_videoclips(clips, method="compose")
+    output = "viral_video.mp4"
+    final.write_videofile(output, fps=24, codec="libx264", audio=False)
+    return output
 
 
-def cleanup():
-    for f in glob.glob("temp_img_*.jpg"):
+# --- 🚀 UI CONTROLS ---
+topic = st.text_input("Subiect istoric:", placeholder="Ex: Scufundarea Titanicului")
+format_v = st.radio("Viteză:", ["⚡ Rapid (2s)", "🎥 Poveste (4s)"])
+dur = 2 if "Rapid" in format_v else 4
+
+if st.button("🔥 GENEREAZĂ"):
+    if topic:
         try:
-            os.remove(f)
-        except:
-            pass
+            # 1. Groq Content
+            res = requests.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={"Authorization": f"Bearer {groq_key}"},
+                json={
+                    "model": "llama-3.3-70b-versatile",
+                    "messages": [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": topic}],
+                    "response_format": {"type": "json_object"}
+                }
+            ).json()
+            data = json.loads(res['choices'][0]['message']['content'])
 
+            # 2. Video
+            with st.spinner("Randăm clipul..."):
+                path = create_viral_video(data['slides'], dur)
+                st.video(path)
+                with open(path, "rb") as f:
+                    st.download_button("📥 DESCARCĂ", f, "video.mp4")
 
-# --- 🚀 ZONA DE COMANDĂ ---
-st.subheader("1. Ce subiect atacăm azi?")
-topic = st.text_input("Subiectul istoric:", placeholder="Ex: Căderea Imperiului Roman, Misterul Piramidelor, etc.")
+            # 3. SEO
+            st.subheader("📱 Instagram SEO")
+            st.code(data['posts'].get('instagram', 'Generând...'))
 
-st.subheader("2. Alege Formatul Clipului")
-format_video = st.radio(
-    "Cum vrei să se miște clipul?",
-    ("⚡ Slideshow Rapid - Stil TikTok (2 secunde/slide)",
-     "🎥 Documentar Poveste - Stil YouTube Shorts (4 secunde/slide)")
-)
-slide_duration = 2 if "Rapid" in format_video else 4
-
-if st.button("🔥 GENEREAZĂ CLIPUL & SEO PERFECT 🔥", use_container_width=True):
-    if not topic:
-        st.error("❗ Scrie un subiect istoric mai întâi!")
-    else:
-        try:
-            cleanup()
-
-            # PASUL 1
-            with st.spinner(f"🧠 Llama 3.3 scrie scriptul viral pentru '{topic}'..."):
-                result = generate_groq_content(topic, groq_key)
-
-            # PASUL 2
-            with st.spinner("🎬 Randăm clipul profesional (Aplicăm filtre, text, poziționare)..."):
-                video_path = create_video(result['slides'], slide_duration)
-
-                st.success("✅ Clipul tău viral este GATA!")
-
-                # Afișare Video + Buton Uriaș de Download
-                st.video(video_path)
-                with open(video_path, "rb") as file:
-                    st.download_button(
-                        label="📥 DESCARCĂ CLIPUL (.MP4)",
-                        data=file,
-                        file_name=f"Viral_History_{topic[:10].replace(' ', '_')}.mp4",
-                        mime="video/mp4",
-                        use_container_width=True
-                    )
-
-            # PASUL 3
-            st.markdown("---")
-            st.subheader("📈 Descrierile SEO & Hashtag-uri (Gata de Copy-Paste)")
-            st.info(
-                "Algoritmul a generat textele de mai jos pentru a maximiza algoritmul de căutare (SEO) pe fiecare platformă.")
-
-            tabs = st.tabs(list(result['posts'].keys()))
-            for idx, (plat, txt) in enumerate(result['posts'].items()):
-                with tabs[idx]:
-                    st.code(txt, language=None)
-
-            cleanup()
         except Exception as e:
-            st.error(f"❌ A apărut o eroare la randare: {e}")
-            cleanup()
+            st.error(f"Eroare: {e}")
+    else:
+        st.warning("Introdu un subiect!")
