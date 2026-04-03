@@ -1,12 +1,11 @@
 """
-DailyHistory Content Pipeline v2.0
+DailyHistory Content Pipeline v3.0
 ───────────────────────────────────
-Gradio web UI → Groq → Video/Slideshow → Multi-platform content
-Optimized for VIRAL history content on TikTok
-Run locally: python app.py → http://localhost:7860
+TTS Voiceover + Short Punch Text + Ambient Music + Multi-platform
+Groq (Qwen3 32B) → Edge TTS → MoviePy → Viral TikTok Content
 """
 
-import os, json, re, textwrap, tempfile, math, datetime, urllib.request, shutil
+import os, json, re, textwrap, tempfile, math, datetime, asyncio
 from pathlib import Path
 from io import BytesIO
 
@@ -14,14 +13,19 @@ import gradio as gr
 import requests
 from PIL import Image, ImageDraw, ImageFont
 
-# ── moviepy ──
 from moviepy import (
-    ImageClip, TextClip, CompositeVideoClip, VideoFileClip,
+    ImageClip, CompositeVideoClip, CompositeAudioClip,
     concatenate_videoclips, AudioFileClip, ColorClip,
     vfx
 )
-from dotenv import load_dotenv
-load_dotenv()
+
+import edge_tts
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 # ═══════════════════════════════════════════════════════════════
 # CONFIG
@@ -32,916 +36,652 @@ GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL = "qwen/qwen3-32b"
 
 OUTPUT_DIR = Path(tempfile.mkdtemp(prefix="dailyhistory_"))
-VIDEO_W, VIDEO_H = 1080, 1920  # 9:16 vertical
+VIDEO_W, VIDEO_H = 1080, 1920
 FPS = 30
 
+# TTS Voice options — dramatic male voices for dark history
+VOICES = {
+    "Guy (US, Deep)": "en-US-GuyNeural",
+    "Ryan (UK, Documentary)": "en-GB-RyanNeural",
+    "Christopher (US, Calm)": "en-US-ChristopherNeural",
+    "William (AU, Unique)": "en-AU-WilliamNeural",
+    "Liam (US, Storyteller)": "en-US-AndrewNeural",
+}
+DEFAULT_VOICE = "en-US-GuyNeural"
+
 # ═══════════════════════════════════════════════════════════════
-# TIKTOK WORD CENSOR — bypass TikTok's content filters
+# TIKTOK WORD CENSOR
 # ═══════════════════════════════════════════════════════════════
-# Format: "original word" → "censored version"
-# TikTok OCR + NLP scans both video text AND descriptions
 CENSOR_MAP = {
-    # Violence / death
-    "killed": "k!lled",
-    "killing": "k!lling",
-    "kill": "k!ll",
-    "kills": "k!lls",
-    "murder": "murd3r",
-    "murdered": "murd3red",
-    "murders": "murd3rs",
-    "murderer": "murd3rer",
-    "murderers": "murd3rers",
-    "death": "d3ath",
-    "deaths": "d3aths",
-    "dead": "d3ad",
-    "died": "d!ed",
-    "die": "d!e",
-    "dying": "dy!ng",
-    "suicide": "su!c!de",
-    "suicides": "su!c!des",
-    "executed": "3xecuted",
-    "execution": "3xecution",
-    "executions": "3xecutions",
-    "assassinated": "a$$a$$inated",
-    "assassination": "a$$a$$ination",
-    "assassin": "a$$a$$in",
-    "massacre": "ma$$acre",
-    "massacred": "ma$$acred",
-    "massacres": "ma$$acres",
-    "slaughter": "sl@ughter",
-    "slaughtered": "sl@ughtered",
-    "genocide": "g3noc!de",
-    "holocaust": "h0locaust",
-    "homicide": "h0mic!de",
-    "manslaughter": "mansl@ughter",
-    "beheaded": "beh3aded",
-    "beheading": "beh3ading",
-    "decapitated": "d3capitated",
-    "hanged": "h@nged",
-    "hanging": "h@nging",
-    "strangled": "str@ngled",
-    "stabbed": "st@bbed",
-    "stabbing": "st@bbing",
-    "shot dead": "sh0t d3ad",
-    "gunshot": "gunsh0t",
-    "bloodbath": "bl00dbath",
-    "bloodshed": "bl00dshed",
-    # War / weapons
-    "war crime": "w@r cr!me",
-    "war crimes": "w@r cr!mes",
-    "weapon": "we@pon",
-    "weapons": "we@pons",
-    "bomb": "b0mb",
-    "bombs": "b0mbs",
-    "bombed": "b0mbed",
-    "bombing": "b0mbing",
-    "bombings": "b0mbings",
-    "explosion": "expl0sion",
-    "nuclear": "nucle@r",
-    "atomic bomb": "at0mic b0mb",
-    "chemical weapon": "chem!cal we@pon",
-    "biological weapon": "b!ological we@pon",
-    "sniper": "sn!per",
-    "rifle": "r!fle",
-    "bullet": "bull3t",
-    "bullets": "bull3ts",
-    "ammunition": "ammun!tion",
-    "grenade": "gren@de",
-    "missile": "m!ssile",
-    "airstrike": "a!rstr!ke",
-    "shelling": "sh3lling",
-    # Abuse / torture
-    "torture": "t0rture",
-    "tortured": "t0rtured",
-    "tortures": "t0rtures",
-    "abuse": "@buse",
-    "abused": "@bused",
-    "abuses": "@buses",
-    "rape": "r@pe",
-    "raped": "r@ped",
-    "rapist": "r@pist",
-    "sexual assault": "s3xual @ssault",
-    "molestation": "mol3station",
-    "slave": "sl@ve",
-    "slaves": "sl@ves",
-    "slavery": "sl@very",
-    "enslaved": "ensl@ved",
-    "human trafficking": "human tr@fficking",
-    "kidnapped": "k!dnapped",
-    "kidnapping": "k!dnapping",
-    # Drugs / substances
-    "drug": "dr*g",
-    "drugs": "dr*gs",
-    "cocaine": "c0caine",
-    "heroin": "her0in",
-    "methamphetamine": "m3th",
-    "overdose": "0verdose",
-    "overdosed": "0verdosed",
-    # Sensitive political / ethnic
-    "terrorist": "terr0rist",
-    "terrorists": "terr0rists",
-    "terrorism": "terr0rism",
-    "nazi": "n@zi",
-    "nazis": "n@zis",
+    "killed": "k!lled", "killing": "k!lling", "kill": "k!ll", "kills": "k!lls",
+    "murder": "murd3r", "murdered": "murd3red", "murders": "murd3rs",
+    "death": "d3ath", "deaths": "d3aths", "dead": "d3ad",
+    "died": "d!ed", "die": "d!e", "dying": "dy!ng",
+    "suicide": "su!c!de", "executed": "3xecuted", "execution": "3xecution",
+    "assassinated": "a$$a$$inated", "assassination": "a$$a$$ination",
+    "massacre": "ma$$acre", "massacred": "ma$$acred",
+    "slaughter": "sl@ughter", "genocide": "g3noc!de",
+    "holocaust": "h0locaust", "homicide": "h0mic!de",
+    "beheaded": "beh3aded", "hanged": "h@nged", "strangled": "str@ngled",
+    "stabbed": "st@bbed", "shot dead": "sh0t d3ad",
+    "bomb": "b0mb", "bombs": "b0mbs", "bombed": "b0mbed", "bombing": "b0mbing",
+    "explosion": "expl0sion", "nuclear": "nucle@r",
+    "weapon": "we@pon", "weapons": "we@pons",
+    "torture": "t0rture", "tortured": "t0rtured",
+    "abuse": "@buse", "abused": "@bused",
+    "rape": "r@pe", "raped": "r@ped",
+    "slave": "sl@ve", "slaves": "sl@ves", "slavery": "sl@very",
+    "drug": "dr*g", "drugs": "dr*gs",
+    "cocaine": "c0caine", "overdose": "0verdose",
+    "terrorist": "terr0rist", "terrorism": "terr0rism",
+    "nazi": "n@zi", "nazis": "n@zis",
     "concentration camp": "c0ncentration c@mp",
-    "concentration camps": "c0ncentration c@mps",
-    "ethnic cleansing": "ethn!c cleans!ng",
-    "hate crime": "h@te cr!me",
-    "extremist": "extr3mist",
-    "extremists": "extr3mists",
-    "propaganda": "prop@ganda",
-    # Medical / body
-    "blood": "bl00d",
-    "bloody": "bl00dy",
-    "corpse": "c0rpse",
-    "corpses": "c0rpses",
-    "body parts": "b0dy p@rts",
-    "organs": "0rgans",
-    "dissection": "d!ssection",
-    "autopsy": "@utopsy",
-    "plague": "pl@gue",
-    "pandemic": "p@ndemic",
-    "virus": "v!rus",
-    "infection": "inf3ction",
-    # Crime
-    "crime": "cr!me",
-    "crimes": "cr!mes",
-    "criminal": "cr!minal",
-    "criminals": "cr!minals",
-    "prison": "pr!son",
-    "prisoner": "pr!soner",
-    "prisoners": "pr!soners",
-    "arrested": "@rrested",
-    "shooting": "sh00ting",
-    "shootings": "sh00tings",
-    "shooter": "sh00ter",
-    "gun": "g*n",
-    "guns": "g*ns",
-    "gunman": "g*nman",
-    "victim": "v!ctim",
-    "victims": "v!ctims",
-    # Misc flagged
-    "porn": "p0rn",
-    "pornography": "p0rnography",
-    "prostitution": "prost!tution",
-    "prostitute": "prost!tute",
-    "naked": "n@ked",
-    "nude": "nud3",
-    "explicit": "expl!cit",
-    "graphic": "gr@phic",
-    "gruesome": "gru3some",
+    "war crime": "w@r cr!me", "ethnic cleansing": "ethn!c cleans!ng",
+    "blood": "bl00d", "bloody": "bl00dy", "corpse": "c0rpse",
+    "plague": "pl@gue", "pandemic": "p@ndemic", "virus": "v!rus",
+    "crime": "cr!me", "criminal": "cr!minal",
+    "prison": "pr!son", "prisoner": "pr!soner",
+    "shooting": "sh00ting", "shooter": "sh00ter",
+    "gun": "g*n", "guns": "g*ns",
+    "victim": "v!ctim", "victims": "v!ctims",
+    "atrocity": "@trocity", "atrocities": "@trocities",
     "disturbing": "d!sturbing",
-    "horrifying": "h0rrifying",
-    "atrocity": "@trocity",
-    "atrocities": "@trocities",
 }
 
 
 def censor_text(text: str) -> str:
-    """Replace flagged words with TikTok-safe censored versions.
-
-    Case-insensitive replacement that preserves original casing pattern.
-    Longer phrases are replaced first to avoid partial matches.
-    """
     if not text:
         return text
-
-    # Sort by length descending so multi-word phrases get matched first
     sorted_words = sorted(CENSOR_MAP.keys(), key=len, reverse=True)
-
     for word in sorted_words:
         replacement = CENSOR_MAP[word]
-        # Case-insensitive replacement preserving surrounding text
         pattern = re.compile(re.escape(word), re.IGNORECASE)
-
-        def _replace_match(match):
-            original = match.group(0)
-            # If original is ALL CAPS, make replacement uppercase
-            if original.isupper():
-                return replacement.upper()
-            # If original is Title Case, capitalize first letter
-            if original[0].isupper():
-                return replacement[0].upper() + replacement[1:] if len(replacement) > 1 else replacement.upper()
+        def _repl(m):
+            o = m.group(0)
+            if o.isupper(): return replacement.upper()
+            if o[0].isupper(): return replacement[0].upper() + replacement[1:]
             return replacement
-
-        text = pattern.sub(_replace_match, text)
-
+        text = pattern.sub(_repl, text)
     return text
 
 
 def censor_content(content: dict) -> dict:
-    """Apply censorship to all text fields in the generated content."""
-    text_fields = [
-        "title", "hook", "comment_bait",
-        "tiktok_description", "instagram_description",
-        "youtube_title", "youtube_description",
-        "facebook_post", "twitter_post",
-    ]
-    for field in text_fields:
+    for field in ["title", "hook", "comment_bait", "tiktok_description",
+                   "instagram_description", "youtube_title", "youtube_description",
+                   "facebook_post", "twitter_post"]:
         if field in content and isinstance(content[field], str):
             content[field] = censor_text(content[field])
-
-    # Censor slide text overlays
-    if "slides" in content:
-        for slide in content["slides"]:
-            if "text_overlay" in slide:
-                slide["text_overlay"] = censor_text(slide["text_overlay"])
-
+    for slide in content.get("slides", []):
+        if "punch_text" in slide:
+            slide["punch_text"] = censor_text(slide["punch_text"])
     return content
 
 
+def uncensor_for_tts(text: str) -> str:
+    """Remove censor chars so TTS pronounces words normally."""
+    replacements = [
+        ("k!ll", "kill"), ("murd3r", "murder"), ("d3ath", "death"),
+        ("d3ad", "dead"), ("d!ed", "died"), ("d!e", "die"), ("dy!ng", "dying"),
+        ("su!c!de", "suicide"), ("3xecut", "execut"), ("a$$a$$in", "assassin"),
+        ("ma$$acre", "massacre"), ("sl@ughter", "slaughter"), ("g3noc!de", "genocide"),
+        ("h0locaust", "holocaust"), ("h0mic!de", "homicide"), ("beh3ad", "behead"),
+        ("h@ng", "hang"), ("str@ngl", "strangl"), ("st@bb", "stabb"),
+        ("sh0t", "shot"), ("bl00d", "blood"), ("w@r", "war"), ("we@pon", "weapon"),
+        ("b0mb", "bomb"), ("expl0sion", "explosion"), ("nucle@r", "nuclear"),
+        ("t0rture", "torture"), ("@buse", "abuse"), ("r@pe", "rape"),
+        ("sl@ve", "slave"), ("ensl@ve", "enslave"), ("dr*g", "drug"),
+        ("c0caine", "cocaine"), ("0verdos", "overdos"), ("terr0rist", "terrorist"),
+        ("terr0rism", "terrorism"), ("n@zi", "nazi"), ("c0ncentration", "concentration"),
+        ("c@mp", "camp"), ("extr3mist", "extremist"), ("prop@ganda", "propaganda"),
+        ("bl00dy", "bloody"), ("c0rpse", "corpse"), ("pl@gue", "plague"),
+        ("p@ndemic", "pandemic"), ("v!rus", "virus"), ("inf3ction", "infection"),
+        ("cr!me", "crime"), ("cr!minal", "criminal"), ("pr!son", "prison"),
+        ("@rrested", "arrested"), ("sh00ting", "shooting"), ("sh00ter", "shooter"),
+        ("g*n", "gun"), ("v!ctim", "victim"), ("@trocit", "atrocit"),
+        ("d!sturb", "disturb"), ("h0rrif", "horrif"), ("gru3some", "gruesome"),
+    ]
+    for censored, clean in replacements:
+        text = text.replace(censored, clean)
+        text = text.replace(censored.capitalize(), clean.capitalize())
+    return text
+
+
 # ═══════════════════════════════════════════════════════════════
-# GROQ HELPER
+# GROQ API
 # ═══════════════════════════════════════════════════════════════
 def call_groq(system_prompt: str, user_prompt: str) -> dict:
-    """Call Groq API and return parsed JSON."""
     api_key = GROQ_API_KEY or os.environ.get("GROQ_API_KEY", "")
     if not api_key:
-        raise ValueError("GROQ_API_KEY not set! Add it in your .env file.")
+        raise ValueError("GROQ_API_KEY not set!")
 
-    resp = requests.post(
-        GROQ_URL,
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-        },
-        json={
-            "model": GROQ_MODEL,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            "temperature": 0.7,
-            "max_completion_tokens": 8192,
-            "top_p": 0.95,
-            "response_format": {"type": "json_object"},
-        },
-        timeout=60,
-    )
-    resp.raise_for_status()
-    content = resp.json()["choices"][0]["message"]["content"]
-    # qwen3 may include <think>...</think> tags, strip them
-    content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
-    return json.loads(content)
+    models = [GROQ_MODEL, "llama-3.3-70b-versatile"]
+    for model in models:
+        try:
+            body = {
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                "temperature": 0.7,
+                "max_completion_tokens": 8192,
+                "top_p": 0.95,
+                "response_format": {"type": "json_object"},
+            }
+            if "qwen" in model:
+                body["chat_template_kwargs"] = {"enable_thinking": False}
+
+            resp = requests.post(
+                GROQ_URL,
+                headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
+                json=body, timeout=120,
+            )
+            resp.raise_for_status()
+            content = resp.json()["choices"][0]["message"]["content"]
+            content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
+            return json.loads(content)
+        except requests.exceptions.Timeout:
+            print(f"Timeout with {model}, trying next...")
+            continue
+        except Exception as e:
+            print(f"Error with {model}: {e}")
+            if model == models[-1]:
+                raise
+            continue
+    raise ValueError("All models failed")
 
 
 # ═══════════════════════════════════════════════════════════════
-# VIRAL CONTENT GENERATION SYSTEM
+# CONTENT GENERATION
 # ═══════════════════════════════════════════════════════════════
+SYSTEM_PROMPT = """You are the content brain behind DailyHistory, a 10M+ follower dark history TikTok brand.
 
-SYSTEM_PROMPT = """You are the content strategist behind a 10M+ follower dark history TikTok brand called DailyHistory. Your videos routinely hit 5-50 MILLION views because you understand exactly what makes people stop scrolling, watch till the end, comment angrily, tag friends, and share.
+CRITICAL: This video has VOICEOVER NARRATION. The voice tells the full story.
+The text on screen is just SHORT PUNCH PHRASES — 3-8 words that hit hard while the voice explains.
 
-You specialize in: dark history, disturbing facts, controversial takes, "things they don't teach you in school", moral dilemmas from history, and shocking revelations that make people question everything.
-
-═══ THE VIRAL FORMULA (non-negotiable) ═══
-
-HOOK (slide 1): Must be ONE of these proven patterns:
-- "The [person/country/company] did something so [dark/insane/disturbing] that [consequence]"
-- "In [year], [shocking thing] happened and nobody talks about it"  
-- "This is the most [disturbing/insane/controversial] thing in history and it's 100% real"
-- "They literally [shocking verb] and got away with it"
-- "Why does nobody talk about what [country/person] did in [year]?"
-- "POV: you just learned what [thing] actually means"
-- "This fact about [topic] will make you physically uncomfortable"
-- "[Number] people [died/suffered/were affected] because of [surprising cause]"
-
-SLIDE TEXT RULES:
-- Slides 1-2: HOOK + setup. Short. Punchy. 1-2 sentences MAX. Create the curiosity gap.
-- Slides 3-6: STORY ESCALATION. Each slide reveals something MORE shocking. 2-3 sentences. Build tension. Use specific numbers, names, dates, quotes.
-- Slides 7-8: THE TWIST or DARKEST PART. The thing that makes people gasp. The detail everyone will comment about.
-- Slide 9 (final): COMMENT BAIT. End with a provocative question or statement that FORCES people to comment. Examples: "And they never apologized.", "This is still legal today.", "Would you have done the same?", "The craziest part? This happened [surprisingly recently]."
-
-TEXT STYLE:
-- Write like you're TELLING someone this story at 2AM and watching their face change
-- Use dramatic pauses via short sentences: "He agreed. Big mistake."
-- Include SPECIFIC details that feel like insider knowledge
-- Make the reader feel like they're learning something forbidden
-- NEVER use generic phrases like "A Life of Service" or "The Legacy Lives On"
-- Each slide must be readable in 6-8 seconds (40-80 words max per slide)
-
-═══ DESCRIPTION STRATEGY ═══
-
-TIKTOK (2500-3000 chars): Write like a mini-article that provides EXTRA shocking details NOT in the video. Structure:
-1. Opening line that re-hooks: "Most people have no idea that..."
-2. 2-3 paragraphs of ADDITIONAL disturbing/fascinating details
-3. A paragraph that connects it to TODAY (modern relevance)
-4. A divisive question that splits the audience ("Do you think this was justified?")
-5. Exactly 5 hashtags at the very end — mix of big (#history #darkhistory) and niche
-
-INSTAGRAM: Storytelling caption with a cliffhanger opening. 25-30 hashtags.
-
-YOUTUBE: SEO-heavy title with year + key terms. Description with timestamps feel.
-
-TWITTER/X: The single most WTF fact from the story. Must make someone say "wait WHAT" and retweet.
-
-FACEBOOK: Start with a question. Make it feel like a debate starter.
-
-═══ CONTENT ANGLES (apply based on the angle parameter) ═══
-
-"Dark History": Focus on the disturbing, cruel, or horrifying aspects. Things that make people uncomfortable. Government coverups, war crimes, medical experiments, forgotten atrocities.
-
-"Controversial Take": Present the event from an unexpected perspective. Challenge the mainstream narrative. Make people DEBATE in comments. "Actually, [villain] had a point..." or "Everyone blames X but Y was actually worse."
-
-"Shocking Facts": Rapid-fire WTF moments. Numbers that don't seem real. Details that sound fake but are 100% verified. "The [thing] was actually invented because..."
-
-"They Lied To You": School textbook myths debunked. Sanitized history exposed. "Your teacher told you X but the truth is..."
-
-"What They Don't Tell You": Hidden details, classified info that got declassified, behind-the-scenes of famous events, the REAL reason things happened.
+Think of it like a documentary: the narrator talks, and bold text flashes key phrases on screen.
 
 Respond in VALID JSON only. No markdown, no backticks.
 
-═══ TIKTOK WORD CENSORSHIP (MANDATORY) ═══
-
-TikTok's AI scans text overlays, descriptions, and even OCR on video frames. To avoid shadowbans and reduced reach, you MUST censor sensitive words in ALL text outputs using these substitutions:
-
-- kill/killed/killing → k!ll/k!lled/k!lling
-- murder/murdered → murd3r/murd3red  
-- death/dead/died → d3ath/d3ad/d!ed
-- genocide → g3noc!de
-- holocaust → h0locaust
-- suicide → su!c!de
-- torture/tortured → t0rture/t0rtured
-- massacre → ma$$acre
-- executed/execution → 3xecuted/3xecution
-- assassinated → a$$a$$inated
-- bomb/bombed/bombing → b0mb/b0mbed/b0mbing
-- nuclear → nucle@r
-- war crime → w@r cr!me
-- slave/slavery → sl@ve/sl@very
-- rape/raped → r@pe/r@ped
-- drug/drugs → dr*g/dr*gs
-- terrorist/terrorism → terr0rist/terr0rism
-- nazi/nazis → n@zi/n@zis
-- concentration camp → c0ncentration c@mp
-- shooting → sh00ting
-- gun/guns → g*n/g*ns
-- victim/victims → v!ctim/v!ctims
-- prison/prisoner → pr!son/pr!soner
-- blood/bloody → bl00d/bl00dy
-- corpse → c0rpse
-- crime/crimes → cr!me/cr!mes
-- abuse/abused → @buse/@bused
-- plague → pl@gue
-- disturbing → d!sturbing
-- atrocity → @trocity
-
-RULE: Apply these substitutions in EVERY text field — slides, descriptions, titles, tweets, everything. The censored words are still perfectly readable to humans but bypass TikTok's automated filters.
-
-Example: "The genocide killed 800,000 people" → "The g3noc!de k!lled 800,000 people"
-
 JSON structure:
 {
-  "title": "short punchy title (max 60 chars)",
-  "hook": "the opening hook line — max 12 words, must create curiosity gap",
-  "angle_used": "which angle was applied",
+  "title": "short title max 60 chars",
+  "hook": "opening hook max 12 words",
   "slides": [
     {
-      "text_overlay": "slide text following the rules above",
+      "punch_text": "3-8 WORDS ONLY. Bold. Shocking. Like a headline that punches you. Examples: 'THEY BURIED IT ALIVE', 'THE REAL DEATH COUNT', '800,000 IN 100 DAYS', 'NOBODY WAS PUNISHED', 'THE COVERUP WORKED'",
+      "narration": "Full voiceover script for this slide. 2-3 sentences. Dramatic, conversational, like telling someone at 2AM. This is what the voice SAYS while the punch text shows on screen. Include specific names, dates, numbers.",
       "duration_sec": 8,
-      "image_search": "2-4 word specific image query"
+      "image_search": "2-4 word image query",
+      "text_color": "white or #FF4444 or #FFD700 — use RED for shocking reveals, GOLD for important names/dates, WHITE for narration"
     }
   ],
-  "comment_bait": "the provocative ending question/statement designed to force comments",
-  "tiktok_description": "2500-3000 char mini-article with extra details + 5 hashtags at end",
-  "instagram_description": "engaging caption under 2200 chars + 25-30 hashtags",
-  "youtube_title": "SEO-rich title, max 100 chars, includes year",
-  "youtube_description": "3 paragraphs with keywords",
-  "facebook_post": "debate-starting post, opens with question",
-  "twitter_post": "under 280 chars, most WTF single fact, 2-3 hashtags",
-  "seo_keywords": ["keyword1", "keyword2", "keyword3", "keyword4", "keyword5"]
-}"""
+  "comment_bait": "provocative ending statement that forces comments",
+  "tiktok_description": "2500-3000 chars mini-article with EXTRA details not in video + exactly 5 hashtags at end",
+  "instagram_description": "under 2200 chars + 25-30 hashtags",
+  "youtube_title": "SEO title max 100 chars with year",
+  "youtube_description": "3 keyword-rich paragraphs",
+  "facebook_post": "debate starter, opens with question",
+  "twitter_post": "under 280 chars, most WTF fact, 2-3 hashtags",
+  "seo_keywords": ["kw1", "kw2", "kw3", "kw4", "kw5"]
+}
+
+SLIDE STRUCTURE (9 slides):
+- Slide 1: HOOK punch text (big, red/gold) + voice sets up the mystery
+- Slide 2-3: SETUP — voice gives context, punch text shows key facts/numbers
+- Slide 4-6: ESCALATION — each more shocking, voice builds tension
+- Slide 7-8: THE TWIST — darkest part, voice drops the bomb
+- Slide 9: COMMENT BAIT — provocative ending, voice asks the question
+
+PUNCH TEXT RULES:
+- NEVER more than 8 words on screen
+- Use ALL CAPS for impact
+- Include NUMBERS when possible ("800,000 DEAD IN 100 DAYS")
+- Contrast/irony works ("THEY CALLED IT MEDICINE")
+- Questions that disturb ("WOULD YOU HAVE OBEYED?")
+- The text should make sense EVEN WITHOUT the voiceover
+
+NARRATION RULES:
+- Write like you're WHISPERING a dark secret to someone
+- Short sentences. "He agreed. That was his last mistake."
+- Include details that make people FEEL something
+- Each slide narration = 15-25 words (fits ~5-8 seconds of speech)
+- DO NOT repeat the punch text word-for-word in narration
+
+TIKTOK DESCRIPTION:
+- 2500-3000 characters MINIMUM
+- Structure: hook → extra shocking details not in video → modern relevance → divisive question → 5 hashtags
+- Must make people SAVE the post for the extra info
+
+APPLY WORD CENSORSHIP on punch_text, tiktok_description, and all text fields using these subs:
+kill→k!ll, murder→murd3r, death→d3ath, dead→d3ad, died→d!ed, genocide→g3noc!de, holocaust→h0locaust, suicide→su!c!de, torture→t0rture, massacre→ma$$acre, bomb→b0mb, nuclear→nucle@r, slave→sl@ve, drug→dr*g, nazi→n@zi, gun→g*n, victim→v!ctim, crime→cr!me, blood→bl00d, shooting→sh00ting, prison→pr!son, etc.
+Do NOT censor narration — that's for voice only, TikTok can't scan audio."""
 
 
 def generate_content(topic: str, format_type: str, angle: str) -> dict:
-    """Generate viral content from a topic + angle."""
     today = datetime.date.today().strftime("%B %d")
-
     user_prompt = f"""Today is {today}. Create VIRAL content about: {topic}
 
 ANGLE: {angle}
-FORMAT: {format_type} (9 slides, 7-9 seconds each, total ~70-80 seconds)
+FORMAT: {format_type} — 9 slides, voice-narrated, 60-90 seconds total
 
-CRITICAL CHECKLIST — verify before responding:
-☐ Slide 1 hook uses one of the proven hook patterns
-☐ Each slide has 40-80 words MAX (readable in 6-8 sec)
-☐ Story ESCALATES — each slide more shocking than the last
-☐ Final slide is COMMENT BAIT (provocative question or statement)
-☐ Specific numbers, names, dates, quotes included
-☐ TikTok description is 2500-3000 characters
-☐ TikTok description adds NEW details not in the video
-☐ Twitter post is the single most shareable fact
-☐ image_search queries are 2-4 words, specific
-
-APPLY THE "{angle}" ANGLE:
-- If "Dark History": go for the throat. Disturbing details. Things people don't want to hear.
-- If "Controversial Take": challenge the popular narrative. Make people ARGUE in comments.
-- If "Shocking Facts": every slide should make someone say "no way that's real."
-- If "They Lied To You": contrast what people THINK happened vs what ACTUALLY happened.
-- If "What They Don't Tell You": hidden details, declassified info, real motivations.
-
-DO NOT write boring educational content. Write content that makes people FEEL something — anger, shock, disbelief, fascination. That's what gets shared.
-
-FINAL CHECK: Did you censor ALL sensitive words using the substitution table above? If not, go back and fix them NOW."""
+REMEMBER:
+- punch_text = 3-8 WORDS ONLY (shown on screen)
+- narration = full voiceover script (spoken by TTS)
+- These are DIFFERENT. punch_text is bold headline, narration is the story.
+- Slide 1 punch_text should be RED (#FF4444) or GOLD (#FFD700)
+- TikTok description = 2500-3000 chars
+- Censor punch_text and descriptions, NOT narration
+- Apply the "{angle}" angle hard"""
 
     result = call_groq(SYSTEM_PROMPT, user_prompt)
-    # Safety net: censor any words the LLM missed
     return censor_content(result)
+
+
+# ═══════════════════════════════════════════════════════════════
+# TTS VOICEOVER
+# ═══════════════════════════════════════════════════════════════
+async def _generate_tts(text: str, path: str, voice: str, rate: str = "-5%"):
+    communicate = edge_tts.Communicate(text, voice, rate=rate, pitch="-2Hz")
+    await communicate.save(path)
+
+
+def generate_voiceover(slides: list, voice: str = DEFAULT_VOICE) -> list:
+    """Generate voiceover audio for each slide. Returns list of paths."""
+    paths = []
+    for i, slide in enumerate(slides):
+        narration = slide.get("narration", slide.get("punch_text", ""))
+        narration = uncensor_for_tts(narration)
+
+        if not narration.strip():
+            paths.append(None)
+            continue
+
+        audio_path = str(OUTPUT_DIR / f"voice_{i}.mp3")
+        try:
+            asyncio.run(_generate_tts(narration, audio_path, voice))
+            paths.append(audio_path)
+        except Exception as e:
+            print(f"TTS error slide {i}: {e}")
+            paths.append(None)
+    return paths
 
 
 # ═══════════════════════════════════════════════════════════════
 # IMAGE HELPERS
 # ═══════════════════════════════════════════════════════════════
 def download_image(query: str, idx: int = 0) -> Image.Image:
-    """Fetch image: Pexels first, Wikimedia fallback, gradient last resort."""
     api_key = PEXELS_API_KEY or os.environ.get("PEXELS_API_KEY", "")
-
-    search_queries = [
-        query,
-        " ".join(query.split()[:3]),
-        " ".join(query.split()[:2]),
-    ]
-
     if api_key:
-        for sq in search_queries:
-            img = _try_pexels(sq, api_key)
-            if img:
-                return img
-
-    for sq in search_queries:
-        img = _try_wikimedia(sq)
+        img = _try_pexels(query, api_key)
         if img:
             return img
-
+        short = " ".join(query.split()[:2])
+        if short != query:
+            img = _try_pexels(short, api_key)
+            if img:
+                return img
+    img = _try_wikimedia(" ".join(query.split()[:3]))
+    if img:
+        return img
     return create_gradient_bg(idx)
 
 
-def _try_pexels(query: str, api_key: str) -> Image.Image | None:
-    """Fetch a portrait-oriented image from Pexels."""
+def _try_pexels(query, api_key):
     try:
-        resp = requests.get(
-            "https://api.pexels.com/v1/search",
+        r = requests.get("https://api.pexels.com/v1/search",
             headers={"Authorization": api_key},
-            params={
-                "query": query,
-                "per_page": 5,
-                "orientation": "portrait",
-                "size": "large",
-            },
-            timeout=10,
-        )
-        if resp.status_code != 200:
-            return None
-
-        photos = resp.json().get("photos", [])
-        if not photos:
-            return None
-
-        for photo in photos:
-            src = photo.get("src", {})
-            img_url = src.get("portrait") or src.get("large") or src.get("original")
-            if img_url:
-                img_resp = requests.get(img_url, timeout=10)
-                if img_resp.status_code == 200 and len(img_resp.content) > 10000:
-                    img = Image.open(BytesIO(img_resp.content)).convert("RGB")
-                    if img.size[0] >= 400 and img.size[1] >= 400:
-                        return img
-    except Exception:
-        pass
+            params={"query": query, "per_page": 3, "orientation": "portrait", "size": "medium"},
+            timeout=6)
+        if r.status_code != 200: return None
+        for p in r.json().get("photos", []):
+            url = p.get("src", {}).get("portrait") or p.get("src", {}).get("large")
+            if url:
+                ir = requests.get(url, timeout=6)
+                if ir.status_code == 200 and len(ir.content) > 5000:
+                    img = Image.open(BytesIO(ir.content)).convert("RGB")
+                    if img.size[0] >= 300: return img
+    except Exception: pass
     return None
 
 
-def _try_wikimedia(query: str) -> Image.Image | None:
-    """Try Wikimedia Commons API for an image."""
+def _try_wikimedia(query):
     try:
-        url = "https://commons.wikimedia.org/w/api.php"
-        params = {
-            "action": "query",
-            "generator": "search",
-            "gsrsearch": f"File: {query}",
-            "gsrlimit": "5",
-            "prop": "imageinfo",
-            "iiprop": "url|mime|size",
-            "iiurlwidth": "1200",
-            "format": "json",
-        }
-        resp = requests.get(url, params=params, timeout=8)
-        data = resp.json()
-        pages = data.get("query", {}).get("pages", {})
-
-        for page_id, page in pages.items():
-            info = page.get("imageinfo", [{}])[0]
-            mime = info.get("mime", "")
-            width = info.get("width", 0)
-            if "image" in mime and "svg" not in mime and width >= 400:
-                img_url = info.get("thumburl") or info.get("url")
-                if img_url:
-                    img_resp = requests.get(img_url, timeout=8)
-                    if img_resp.status_code == 200 and len(img_resp.content) > 5000:
-                        img = Image.open(BytesIO(img_resp.content)).convert("RGB")
-                        if img.size[0] >= 200 and img.size[1] >= 200:
-                            return img
-    except Exception:
-        pass
+        r = requests.get("https://commons.wikimedia.org/w/api.php",
+            params={"action":"query","generator":"search","gsrsearch":f"File: {query}",
+                    "gsrlimit":"3","prop":"imageinfo","iiprop":"url|mime",
+                    "iiurlwidth":"1080","format":"json"}, timeout=5)
+        for p in r.json().get("query",{}).get("pages",{}).values():
+            info = p.get("imageinfo",[{}])[0]
+            if "image" in info.get("mime","") and "svg" not in info.get("mime",""):
+                url = info.get("thumburl") or info.get("url")
+                if url:
+                    ir = requests.get(url, timeout=5)
+                    if ir.status_code == 200:
+                        img = Image.open(BytesIO(ir.content)).convert("RGB")
+                        if img.size[0] >= 200: return img
+    except Exception: pass
     return None
 
 
-def create_gradient_bg(idx: int = 0) -> Image.Image:
-    """Create a cinematic gradient background."""
+def create_gradient_bg(idx=0):
     palettes = [
-        [(20, 10, 10), (80, 20, 20)],       # blood red (dark history)
-        [(10, 10, 25), (30, 30, 80)],        # midnight blue
-        [(25, 10, 10), (100, 40, 15)],       # burning amber
-        [(10, 20, 15), (25, 70, 40)],        # dark forest
-        [(20, 10, 30), (60, 20, 80)],        # deep purple
-        [(30, 25, 10), (90, 70, 20)],        # aged gold
-        [(15, 15, 20), (45, 45, 65)],        # steel grey
-        [(30, 15, 5), (85, 45, 15)],         # dark copper
+        [(20,10,10),(80,20,20)], [(10,10,25),(30,30,80)],
+        [(25,10,10),(100,40,15)], [(10,20,15),(25,70,40)],
+        [(20,10,30),(60,20,80)], [(30,25,10),(90,70,20)],
+        [(15,15,20),(45,45,65)], [(30,15,5),(85,45,15)],
     ]
     c1, c2 = palettes[idx % len(palettes)]
     img = Image.new("RGB", (VIDEO_W, VIDEO_H))
     draw = ImageDraw.Draw(img)
     for y in range(VIDEO_H):
-        t = y / VIDEO_H
-        t = t * t * (3 - 2 * t)  # smoothstep
-        r = int(c1[0] + (c2[0] - c1[0]) * t)
-        g = int(c1[1] + (c2[1] - c1[1]) * t)
-        b = int(c1[2] + (c2[2] - c1[2]) * t)
-        draw.line([(0, y), (VIDEO_W, y)], fill=(r, g, b))
+        t = (y/VIDEO_H)**2 * (3 - 2*(y/VIDEO_H))
+        r = int(c1[0]+(c2[0]-c1[0])*t)
+        g = int(c1[1]+(c2[1]-c1[1])*t)
+        b = int(c1[2]+(c2[2]-c1[2])*t)
+        draw.line([(0,y),(VIDEO_W,y)], fill=(r,g,b))
     return img
 
 
-def add_text_to_image(
-    img: Image.Image,
-    text: str,
-    position: str = "center",
-    font_size: int = 64,
-    color: str = "white",
-    shadow: bool = True,
-    text_bg: bool = False,
-) -> Image.Image:
-    """Add styled text overlay to an image."""
+# ═══════════════════════════════════════════════════════════════
+# TEXT OVERLAY
+# ═══════════════════════════════════════════════════════════════
+def _get_font(size):
+    for fp in ["/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+               "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+               "C:/Windows/Fonts/arialbd.ttf", "C:/Windows/Fonts/impact.ttf",
+               "/System/Library/Fonts/Helvetica.ttc"]:
+        if os.path.exists(fp):
+            try: return ImageFont.truetype(fp, size)
+            except: continue
+    return ImageFont.load_default()
+
+
+def add_text_to_image(img, text, position="center", font_size=64,
+                       color="white", shadow=True, text_bg=False):
     img = img.copy().resize((VIDEO_W, VIDEO_H), Image.LANCZOS)
     draw = ImageDraw.Draw(img)
+    font = _get_font(font_size)
 
-    font = None
-    font_paths = [
-        # Linux
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-        "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
-        # Windows
-        "C:/Windows/Fonts/arialbd.ttf",
-        "C:/Windows/Fonts/impact.ttf",
-        "C:/Windows/Fonts/segoeui.ttf",
-        # macOS
-        "/System/Library/Fonts/Helvetica.ttc",
-    ]
-    for fp in font_paths:
-        if os.path.exists(fp):
-            try:
-                font = ImageFont.truetype(fp, font_size)
-                break
-            except Exception:
-                continue
-    if font is None:
-        font = ImageFont.load_default()
-
-    usable_width = int(VIDEO_W * 0.78)
-    max_chars = max(18, int(usable_width / (font_size * 0.52)))
+    # Keep text well inside margins
+    usable_w = int(VIDEO_W * 0.75)
+    max_chars = max(12, int(usable_w / (font_size * 0.55)))
     lines = textwrap.wrap(text, width=max_chars)
-    line_height = int(font_size * 1.45)
+    line_h = int(font_size * 1.5)
+    total_h = len(lines) * line_h
 
-    total_h = len(lines) * line_height
     if position == "center":
         start_y = (VIDEO_H - total_h) // 2
     elif position == "top":
         start_y = 100
     else:
-        start_y = VIDEO_H - total_h - 180
+        start_y = VIDEO_H - total_h - 200
 
-    # Semi-transparent background for readability
+    # Semi-transparent bg box
     if text_bg and lines:
-        padding = 45
-        bg_top = start_y - padding
-        bg_bottom = start_y + total_h + padding
-        bg_overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
-        bg_draw = ImageDraw.Draw(bg_overlay)
-        bg_draw.rounded_rectangle(
-            [80, bg_top, VIDEO_W - 80, bg_bottom],
-            radius=16,
-            fill=(0, 0, 0, 190),
-        )
-        img = img.convert("RGBA")
-        img = Image.alpha_composite(img, bg_overlay)
-        img = img.convert("RGB")
+        pad = 50
+        bg = Image.new("RGBA", img.size, (0,0,0,0))
+        bgd = ImageDraw.Draw(bg)
+        bgd.rounded_rectangle(
+            [100, start_y - pad, VIDEO_W - 100, start_y + total_h + pad],
+            radius=16, fill=(0,0,0,180))
+        img = Image.alpha_composite(img.convert("RGBA"), bg).convert("RGB")
         draw = ImageDraw.Draw(img)
 
+    # Parse color
+    if isinstance(color, str) and color.startswith("#"):
+        try:
+            color = tuple(int(color[i:i+2], 16) for i in (1,3,5))
+        except: color = (255,255,255)
+    elif color == "white": color = (255,255,255)
+    elif color == "red": color = (255,68,68)
+    elif color == "gold": color = (255,215,0)
+
     for i, line in enumerate(lines):
-        bbox = draw.textbbox((0, 0), line, font=font)
+        bbox = draw.textbbox((0,0), line, font=font)
         tw = bbox[2] - bbox[0]
         x = (VIDEO_W - tw) // 2
-        y = start_y + i * line_height
+        y = start_y + i * line_h
 
-        # Strong outline for readability on any background
         if shadow:
-            for ox in range(-3, 4):
-                for oy in range(-3, 4):
-                    if ox == 0 and oy == 0:
-                        continue
-                    draw.text((x + ox, y + oy), line, font=font, fill=(0, 0, 0))
-
-        draw.text((x, y), line, font=font, fill=color)
+            for ox in range(-3,4):
+                for oy in range(-3,4):
+                    if ox==0 and oy==0: continue
+                    draw.text((x+ox, y+oy), line, font=font, fill=(0,0,0))
+        draw.text((x,y), line, font=font, fill=color)
 
     return img
 
 
-def add_darkening_overlay(img: Image.Image, opacity: float = 0.55) -> Image.Image:
-    """Add a dark overlay to make text readable."""
+def add_darkening_overlay(img, opacity=0.5):
     img = img.copy()
-    overlay = Image.new("RGBA", img.size, (0, 0, 0, int(255 * opacity)))
-    img = img.convert("RGBA")
-    img = Image.alpha_composite(img, overlay)
-    return img.convert("RGB")
+    ov = Image.new("RGBA", img.size, (0,0,0,int(255*opacity)))
+    return Image.alpha_composite(img.convert("RGBA"), ov).convert("RGB")
 
 
-def add_vignette(img: Image.Image) -> Image.Image:
-    """Add cinematic vignette effect."""
+def add_vignette(img):
     img = img.copy().convert("RGBA")
-    vignette = Image.new("RGBA", img.size, (0, 0, 0, 0))
-    draw = ImageDraw.Draw(vignette)
-    cx, cy = img.size[0] // 2, img.size[1] // 2
-    max_r = math.sqrt(cx**2 + cy**2)
-    for r_step in range(100, 0, -1):
-        r = max_r * r_step / 100
-        alpha = int(200 * (1 - (r_step / 100) ** 2))
-        alpha = max(0, min(255, alpha))
-        bbox = [cx - r, cy - r, cx + r, cy + r]
-        draw.ellipse(bbox, fill=(0, 0, 0, alpha))
-    img = Image.alpha_composite(img, vignette)
-    return img.convert("RGB")
+    vig = Image.new("RGBA", img.size, (0,0,0,0))
+    d = ImageDraw.Draw(vig)
+    cx, cy = img.size[0]//2, img.size[1]//2
+    mr = math.sqrt(cx**2 + cy**2)
+    for rs in range(100, 0, -1):
+        r = mr * rs/100
+        a = int(200 * (1-(rs/100)**2))
+        d.ellipse([cx-r, cy-r, cx+r, cy+r], fill=(0,0,0,max(0,min(255,a))))
+    return Image.alpha_composite(img, vig).convert("RGB")
 
 
 # ═══════════════════════════════════════════════════════════════
 # BACKGROUND MUSIC
 # ═══════════════════════════════════════════════════════════════
-def create_ambient_music(duration_sec: float) -> str:
-    """Create a dark, tension-building ambient track."""
+def create_ambient_music(duration_sec):
     try:
         from pydub import AudioSegment
         from pydub.generators import Sine
-
-        duration_ms = int(duration_sec * 1000)
-
-        # Dark drone — lower, more ominous
-        base = Sine(82.41).to_audio_segment(duration=duration_ms).apply_gain(-26)  # Low E
-        # Dissonant minor second for tension
-        tension = Sine(87.31).to_audio_segment(duration=duration_ms).apply_gain(-34)  # F
-        # Deep sub bass
-        sub = Sine(41.20).to_audio_segment(duration=duration_ms).apply_gain(-28)  # Low E octave down
-        # Eerie high tone
-        eerie = Sine(493.88).to_audio_segment(duration=duration_ms).apply_gain(-38)  # B4
-
+        ms = int(duration_sec * 1000)
+        base = Sine(82.41).to_audio_segment(duration=ms).apply_gain(-26)
+        tension = Sine(87.31).to_audio_segment(duration=ms).apply_gain(-34)
+        sub = Sine(41.20).to_audio_segment(duration=ms).apply_gain(-28)
+        eerie = Sine(493.88).to_audio_segment(duration=ms).apply_gain(-38)
         mix = base.overlay(tension).overlay(sub).overlay(eerie)
-
-        fade_ms = min(4000, duration_ms // 3)
-        mix = mix.fade_in(fade_ms).fade_out(fade_ms)
-        mix = mix.apply_gain(-6)
-
-        music_path = str(OUTPUT_DIR / "ambient_bg.wav")
-        mix.export(music_path, format="wav")
-        return music_path
+        fade = min(4000, ms//3)
+        mix = mix.fade_in(fade).fade_out(fade).apply_gain(-6)
+        path = str(OUTPUT_DIR / "ambient.wav")
+        mix.export(path, format="wav")
+        return path
     except Exception as e:
-        print(f"Music generation error: {e}")
+        print(f"Music error: {e}")
         return None
 
 
 # ═══════════════════════════════════════════════════════════════
-# VIDEO / SLIDESHOW CREATION
+# VIDEO CREATION
 # ═══════════════════════════════════════════════════════════════
-def create_slideshow(slides: list, title: str) -> str:
-    """Create a slideshow video with dark, cinematic feel."""
+def create_slideshow(slides, title, voice_paths):
+    """Create slideshow synced to voiceover with punch text overlays."""
     clips = []
 
     for i, slide in enumerate(slides):
-        duration = slide.get("duration_sec", 8)
-        text = slide.get("text_overlay", "")
+        text = slide.get("punch_text", slide.get("text_overlay", ""))
+        text_color = slide.get("text_color", "white")
+        is_first = (i == 0)
+        is_last = (i == len(slides) - 1)
 
-        bg_img = download_image(slide.get("image_search", title), i)
-        bg_img = bg_img.resize((VIDEO_W, VIDEO_H), Image.LANCZOS)
-        bg_img = add_darkening_overlay(bg_img, 0.45)  # darker for more drama
-        bg_img = add_vignette(bg_img)
+        # Duration: match to voiceover length, or use default
+        voice_audio = None
+        if voice_paths and i < len(voice_paths) and voice_paths[i]:
+            try:
+                voice_audio = AudioFileClip(voice_paths[i])
+                duration = voice_audio.duration + 1.2  # breathing room
+            except Exception:
+                duration = slide.get("duration_sec", 8)
+        else:
+            duration = slide.get("duration_sec", 8)
 
-        # Main story text
-        final_img = add_text_to_image(
-            bg_img, text, position="center", font_size=46, text_bg=True
-        )
+        # Build frame
+        bg = download_image(slide.get("image_search", title), i)
+        bg = bg.resize((VIDEO_W, VIDEO_H), Image.LANCZOS)
+        bg = add_darkening_overlay(bg, 0.5)
+        bg = add_vignette(bg)
+
+        # Punch text — BIG and SHORT
+        font_size = 72 if is_first else 58  # first slide bigger
+        frame = add_text_to_image(bg, text, position="center",
+                                   font_size=font_size, color=text_color, text_bg=True)
 
         # Watermark
-        final_img = add_text_to_image(
-            final_img, "@DailyHistory", position="top", font_size=30, color="#c8a44e"
-        )
+        frame = add_text_to_image(frame, "@DailyHistory", position="top",
+                                   font_size=28, color="#c8a44e")
 
-        # Slide counter (bottom)
-        if len(slides) > 1:
-            counter_text = f"{i + 1}/{len(slides)}"
-            final_img = add_text_to_image(
-                final_img, counter_text, position="bottom", font_size=24, color="#888888"
-            )
+        # Slide counter
+        frame = add_text_to_image(frame, f"{i+1}/{len(slides)}",
+                                   position="bottom", font_size=22, color="#666666")
 
-        frame_path = str(OUTPUT_DIR / f"frame_{i}.png")
-        final_img.save(frame_path, quality=95)
+        fpath = str(OUTPUT_DIR / f"frame_{i}.png")
+        frame.save(fpath, quality=95)
 
-        clip = ImageClip(frame_path).with_duration(duration)
+        clip = ImageClip(fpath).with_duration(duration)
+
+        # Attach voice to this clip
+        if voice_audio:
+            voice_audio = voice_audio.with_start(0.4)
+            clip = clip.with_audio(voice_audio)
+
         clips.append(clip)
 
-    # Cross-dissolve transitions
+    # Transitions
     final_clips = []
     for i, clip in enumerate(clips):
         if i > 0:
-            clip = clip.with_effects([vfx.CrossFadeIn(0.4)])
+            clip = clip.with_effects([vfx.CrossFadeIn(0.3)])
         if i < len(clips) - 1:
-            clip = clip.with_effects([vfx.CrossFadeOut(0.4)])
+            clip = clip.with_effects([vfx.CrossFadeOut(0.3)])
         final_clips.append(clip)
 
     final = concatenate_videoclips(final_clips, method="compose")
+    total_dur = final.duration
 
-    total_duration = final.duration
-    music_path = create_ambient_music(total_duration)
+    # Layer ambient music underneath voice
+    music_path = create_ambient_music(total_dur)
     if music_path:
         try:
-            audio = AudioFileClip(music_path).with_duration(total_duration)
-            final = final.with_audio(audio)
+            bg_music = AudioFileClip(music_path).with_duration(total_dur)
+            bg_music = bg_music.with_effects([vfx.MultiplyVolume(0.15)])
+            if final.audio:
+                final = final.with_audio(CompositeAudioClip([final.audio, bg_music]))
+            else:
+                final = final.with_audio(bg_music)
         except Exception as e:
-            print(f"Audio attach error: {e}")
+            print(f"Music mix error: {e}")
 
-    output_path = str(OUTPUT_DIR / f"dailyhistory_{datetime.date.today()}.mp4")
-    final.write_videofile(
-        output_path,
-        fps=FPS,
-        codec="libx264",
-        audio_codec="aac",
-        preset="medium",
-        threads=2,
-        logger=None,
-    )
+    out = str(OUTPUT_DIR / f"dailyhistory_{datetime.date.today()}.mp4")
+    final.write_videofile(out, fps=FPS, codec="libx264", audio_codec="aac",
+                          preset="medium", threads=2, logger=None)
 
-    for clip in final_clips:
-        clip.close()
+    for c in final_clips:
+        try: c.close()
+        except: pass
 
-    return output_path
-
-
-def create_video_clip(slides: list, title: str, uploaded_clips: list = None) -> str:
-    """Create a video clip with text overlays."""
-    clips = []
-
-    for i, slide in enumerate(slides):
-        duration = slide.get("duration_sec", 8)
-
-        bg_img = download_image(slide.get("image_search", title), i)
-        bg_img = bg_img.resize((VIDEO_W, VIDEO_H), Image.LANCZOS)
-        bg_img = add_darkening_overlay(bg_img, 0.4)
-        bg_img = add_vignette(bg_img)
-        frame_path = str(OUTPUT_DIR / f"vframe_{i}.png")
-        bg_img.save(frame_path)
-        base_clip = ImageClip(frame_path).with_duration(duration)
-
-        clips.append(base_clip)
-
-    final = concatenate_videoclips(clips, method="compose")
-
-    total_duration = final.duration
-    music_path = create_ambient_music(total_duration)
-    if music_path:
-        try:
-            audio = AudioFileClip(music_path).with_duration(total_duration)
-            final = final.with_audio(audio)
-        except Exception as e:
-            print(f"Audio attach error: {e}")
-
-    output_path = str(OUTPUT_DIR / f"dailyhistory_video_{datetime.date.today()}.mp4")
-    final.write_videofile(output_path, fps=FPS, codec="libx264", audio_codec="aac", preset="medium", threads=2, logger=None)
-
-    for clip in clips:
-        clip.close()
-
-    return output_path
+    return out
 
 
 # ═══════════════════════════════════════════════════════════════
-# AUTO-POST FUNCTIONS
+# AUTO-POST
 # ═══════════════════════════════════════════════════════════════
-def post_to_twitter(text: str) -> str:
+def post_to_twitter(text):
     bearer = os.environ.get("TWITTER_BEARER_TOKEN")
-    if not bearer:
-        return "📋 MANUAL — Copy tweet below"
+    if not bearer: return "📋 MANUAL"
     try:
-        resp = requests.post(
-            "https://api.twitter.com/2/tweets",
-            headers={"Authorization": f"Bearer {bearer}", "Content-Type": "application/json"},
-            json={"text": text},
-            timeout=10,
-        )
-        if resp.ok:
-            return f"✅ POSTED — Tweet ID: {resp.json().get('data', {}).get('id')}"
-        return f"❌ FAILED — {resp.json().get('detail', resp.text)}"
-    except Exception as e:
-        return f"❌ ERROR — {e}"
+        r = requests.post("https://api.twitter.com/2/tweets",
+            headers={"Authorization":f"Bearer {bearer}","Content-Type":"application/json"},
+            json={"text":text}, timeout=10)
+        return f"✅ POSTED — {r.json().get('data',{}).get('id')}" if r.ok else f"❌ {r.text}"
+    except Exception as e: return f"❌ {e}"
 
 
-def post_to_facebook(text: str) -> str:
+def post_to_facebook(text):
     token = os.environ.get("FACEBOOK_PAGE_TOKEN")
-    page_id = os.environ.get("FACEBOOK_PAGE_ID")
-    if not token or not page_id:
-        return "📋 MANUAL — Copy post below"
+    pid = os.environ.get("FACEBOOK_PAGE_ID")
+    if not token or not pid: return "📋 MANUAL"
     try:
-        resp = requests.post(
-            f"https://graph.facebook.com/v19.0/{page_id}/feed",
-            json={"message": text, "access_token": token},
-            timeout=10,
-        )
-        if resp.ok:
-            return f"✅ POSTED — Post ID: {resp.json().get('id')}"
-        return f"❌ FAILED — {resp.json().get('error', {}).get('message', resp.text)}"
-    except Exception as e:
-        return f"❌ ERROR — {e}"
+        r = requests.post(f"https://graph.facebook.com/v19.0/{pid}/feed",
+            json={"message":text,"access_token":token}, timeout=10)
+        return f"✅ POSTED — {r.json().get('id')}" if r.ok else f"❌ {r.text}"
+    except Exception as e: return f"❌ {e}"
 
 
 # ═══════════════════════════════════════════════════════════════
-# MAIN PIPELINE
+# PIPELINE — SPLIT IN 2 STEPS (no timeout)
 # ═══════════════════════════════════════════════════════════════
-def run_pipeline(topic: str, format_type: str, angle: str, progress=gr.Progress()):
-    """Main pipeline: topic + angle → viral content → video → descriptions."""
+_state = {}
 
+
+def step1_generate_text(topic, format_type, angle, voice_name):
+    """Step 1: AI content + TTS voiceover (~15-30 sec)."""
+    global _state
     if not topic.strip():
-        raise gr.Error("Scrie un topic! Ex: 'Unit 731 human experiments' or 'CIA MKUltra program'")
+        raise gr.Error("Scrie un topic!")
 
-    progress(0.1, desc="🧠 Generating viral content...")
-    try:
-        content = generate_content(topic, format_type, angle)
-    except Exception as e:
-        raise gr.Error(f"Groq API error: {e}")
+    content = generate_content(topic, format_type, angle)
+    _state["content"] = content
+    _state["format"] = format_type
 
-    progress(0.4, desc="🎨 Building cinematic frames...")
+    # Generate voiceover
+    voice_id = VOICES.get(voice_name, DEFAULT_VOICE)
+    voice_paths = generate_voiceover(content.get("slides", []), voice_id)
+    _state["voice_paths"] = voice_paths
 
-    slides = content.get("slides", [])
-    title = content.get("title", topic)
+    # Auto-post text platforms
+    tw = post_to_twitter(content.get("twitter_post", ""))
+    fb = post_to_facebook(content.get("facebook_post", ""))
 
-    progress(0.5, desc=f"🎬 Rendering {format_type.lower()}...")
-    try:
-        if format_type == "Slideshow":
-            video_path = create_slideshow(slides, title)
-        else:
-            video_path = create_video_clip(slides, title)
-    except Exception as e:
-        video_path = None
-        print(f"Video creation error: {e}")
+    tiktok = content.get("tiktok_description", "")
+    if len(tiktok) > 3000:
+        tiktok = tiktok[:2995] + "..."
 
-    progress(0.8, desc="📱 Preparing platform posts...")
+    status = f"""═══ POSTING STATUS ═══
 
-    twitter_status = post_to_twitter(content.get("twitter_post", ""))
-    facebook_status = post_to_facebook(content.get("facebook_post", ""))
+  𝕏 Twitter: {tw}
+  f Facebook: {fb}
+  ♪ TikTok: 📋 Upload video + paste description
+  ◻ Instagram: 📋 Upload reel + paste description
+  ▶ YouTube: 📋 Upload Short + paste title/desc
 
-    tiktok_desc = content.get("tiktok_description", "")
-    if len(tiktok_desc) > 3000:
-        tiktok_desc = tiktok_desc[:2995] + "..."
+  🎤 Voice: {voice_name}
+  🎯 Angle: {content.get('angle_used', angle)}
+  💬 Comment bait: {content.get('comment_bait', 'N/A')}
 
-    progress(1.0, desc="✅ Done!")
-
-    posting_status = f"""═══════════════════════════════════════
-  📊 POSTING STATUS
-═══════════════════════════════════════
-
-  🎯 Angle:       {content.get('angle_used', angle)}
-  💬 Comment Bait: {content.get('comment_bait', 'N/A')}
-
-  𝕏  Twitter:     {twitter_status}
-  f  Facebook:    {facebook_status}
-  ♪  TikTok:      📋 MANUAL — Upload video + paste description
-  ◻  Instagram:   📋 MANUAL — Upload reel + paste description
-  ▶  YouTube:     📋 MANUAL — Upload Short + paste title/desc
-  @  Threads:     📋 MANUAL — Paste description
-
-═══════════════════════════════════════
-  💡 Add API keys in .env to enable auto-posting:
-     TWITTER_BEARER_TOKEN, FACEBOOK_PAGE_TOKEN
-═══════════════════════════════════════"""
+  ✅ Text + voice ready! Click GENERATE VIDEO below."""
 
     return (
-        video_path,
         content.get("title", ""),
         content.get("hook", ""),
         content.get("comment_bait", ""),
-        tiktok_desc,
-        f"{len(tiktok_desc)} / 3000 chars",
+        tiktok,
+        f"{len(tiktok)} / 3000 chars",
         content.get("instagram_description", ""),
         content.get("youtube_title", ""),
         content.get("youtube_description", ""),
         content.get("facebook_post", ""),
         content.get("twitter_post", ""),
-        posting_status,
-        json.dumps(content.get("slides", []), indent=2),
+        status,
+        json.dumps(content.get("slides", []), indent=2, ensure_ascii=False),
     )
+
+
+def step2_generate_video():
+    """Step 2: Build video with voiceover (~1-3 min)."""
+    global _state
+    if "content" not in _state:
+        raise gr.Error("Generate text first!")
+
+    slides = _state["content"].get("slides", [])
+    title = _state["content"].get("title", "DailyHistory")
+    voice_paths = _state.get("voice_paths", [])
+
+    video_path = create_slideshow(slides, title, voice_paths)
+    return video_path
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -970,50 +710,36 @@ CSS = """
     text-align: center; font-size: 2.4em; font-weight: 700;
     color: #c8a44e !important; letter-spacing: 0.08em;
     text-transform: uppercase; margin-bottom: 0 !important;
-    font-family: 'Playfair Display', Georgia, serif !important;
 }
 .sub-title {
     text-align: center; font-size: 0.85em; letter-spacing: 0.3em;
     text-transform: uppercase; color: #7a6e58 !important;
-    margin-top: 4px !important;
-}
-.angle-info {
-    background: linear-gradient(135deg, #1a1610 0%, #2a2418 100%);
-    border: 1px solid #c8a44e33;
-    border-radius: 8px; padding: 12px 16px;
-    color: #b8a890; font-size: 0.85em; margin-top: 8px;
 }
 footer { display: none !important; }
 """
 
+
 def build_ui():
-    with gr.Blocks(title="DailyHistory — Viral Pipeline") as app:
+    with gr.Blocks(title="DailyHistory v3 — Viral Pipeline") as app:
 
         gr.Markdown("<h1 class='main-title'>DailyHistory</h1>")
-        gr.Markdown("<p class='sub-title'>Viral Content Pipeline — Dark History Edition</p>")
+        gr.Markdown("<p class='sub-title'>Viral Pipeline v3 — TTS Voiceover Edition</p>")
         gr.Markdown("---")
 
         # ── INPUT ──
         with gr.Group():
-            gr.Markdown("### ① Topic + Viral Angle")
-            with gr.Row():
-                topic_input = gr.Textbox(
-                    label="Topic (English)",
-                    placeholder='e.g. "Unit 731 experiments", "CIA MKUltra", "Radium Girls", "What really sank the Titanic"',
-                    lines=2,
-                    scale=3,
-                )
+            gr.Markdown("### ① Topic + Settings")
+            topic_input = gr.Textbox(
+                label="Topic (English)",
+                placeholder='e.g. "Unit 731 experiments", "What really sank the Titanic"',
+                lines=2,
+            )
             with gr.Row():
                 angle_select = gr.Radio(
-                    [
-                        "Dark History",
-                        "Controversial Take",
-                        "Shocking Facts",
-                        "They Lied To You",
-                        "What They Don't Tell You",
-                    ],
+                    ["Dark History", "Controversial Take", "Shocking Facts",
+                     "They Lied To You", "What They Don't Tell You"],
                     value="Dark History",
-                    label="🎯 Content Angle (how to frame it for max engagement)",
+                    label="🎯 Angle",
                     scale=2,
                 )
                 format_type = gr.Radio(
@@ -1022,104 +748,92 @@ def build_ui():
                     label="Format",
                     scale=1,
                 )
-
-            gr.Markdown(
-                "<div class='angle-info'>"
-                "💡 <b>Dark History</b> = disturbing facts & atrocities · "
-                "<b>Controversial Take</b> = challenge mainstream narrative · "
-                "<b>Shocking Facts</b> = WTF rapid-fire · "
-                "<b>They Lied To You</b> = debunk textbook myths · "
-                "<b>What They Don't Tell You</b> = hidden details & real reasons"
-                "</div>"
+            voice_select = gr.Dropdown(
+                choices=list(VOICES.keys()),
+                value="Guy (US, Deep)",
+                label="🎤 Voice",
+            )
+            generate_text_btn = gr.Button(
+                "⚡ STEP 1 — GENERATE TEXT + VOICE",
+                variant="primary", size="lg",
             )
 
-            generate_btn = gr.Button(
-                "⚡ GENERATE VIRAL CONTENT",
-                variant="primary",
-                size="lg",
-            )
-
-        # ── OUTPUT: VIDEO ──
+        # ── TITLE + HOOK ──
         gr.Markdown("---")
-        gr.Markdown("### ② Your Video")
-        video_output = gr.Video(label="Generated Video — download → upload to TikTok")
-
         with gr.Row():
-            title_output = gr.Textbox(label="📌 Title", interactive=False)
-            hook_output = gr.Textbox(label="🪝 Hook", interactive=False)
+            title_out = gr.Textbox(label="📌 Title", interactive=False)
+            hook_out = gr.Textbox(label="🪝 Hook", interactive=False)
+        comment_out = gr.Textbox(label="💬 Comment Bait", interactive=False)
 
-        comment_bait_output = gr.Textbox(
-            label="💬 Comment Bait (last slide — forces engagement)",
-            interactive=False,
-        )
-
-        # ── OUTPUT: TIKTOK ──
+        # ── TIKTOK ──
         gr.Markdown("---")
-        gr.Markdown("### ③ TikTok — Copy & Post")
-        tiktok_desc = gr.Textbox(
-            label="♪ TikTok Description (select all → copy → paste in TikTok)",
-            lines=10,
-            interactive=False,
-        )
-        tiktok_chars = gr.Textbox(label="Character count", interactive=False)
+        gr.Markdown("### ② TikTok Description")
+        tiktok_out = gr.Textbox(label="♪ TikTok (select all → copy → paste)", lines=10, interactive=False)
+        tiktok_chars = gr.Textbox(label="Chars", interactive=False)
 
-        # ── OUTPUT: OTHER PLATFORMS ──
+        # ── OTHER PLATFORMS ──
         gr.Markdown("---")
-        gr.Markdown("### ④ Other Platforms")
-
+        gr.Markdown("### ③ Other Platforms")
         with gr.Tab("Instagram"):
-            ig_desc = gr.Textbox(label="◻ Instagram Reels", lines=6, interactive=False)
-
-        with gr.Tab("YouTube Shorts"):
-            yt_title = gr.Textbox(label="▶ YouTube Title", interactive=False)
-            yt_desc = gr.Textbox(label="▶ YouTube Description", lines=5, interactive=False)
-
+            ig_out = gr.Textbox(label="◻ Instagram", lines=6, interactive=False)
+        with gr.Tab("YouTube"):
+            yt_title = gr.Textbox(label="▶ Title", interactive=False)
+            yt_desc = gr.Textbox(label="▶ Description", lines=5, interactive=False)
         with gr.Tab("Facebook"):
-            fb_post = gr.Textbox(label="f Facebook Post", lines=4, interactive=False)
-
+            fb_out = gr.Textbox(label="f Post", lines=4, interactive=False)
         with gr.Tab("X / Twitter"):
-            tw_post = gr.Textbox(label="𝕏 Tweet", lines=3, interactive=False)
+            tw_out = gr.Textbox(label="𝕏 Tweet", lines=3, interactive=False)
 
         # ── STATUS ──
         gr.Markdown("---")
-        gr.Markdown("### ⑤ Status")
-        posting_status = gr.Textbox(label="Pipeline results", lines=16, interactive=False)
+        status_out = gr.Textbox(label="📊 Status", lines=14, interactive=False)
 
-        # ── SLIDES DATA ──
-        with gr.Accordion("🔧 Slides JSON (for CapCut import)", open=False):
-            slides_json = gr.Code(language="json", label="Slides data")
+        # ── SLIDES ──
+        with gr.Accordion("🔧 Slides JSON", open=False):
+            slides_out = gr.Code(language="json", label="Slides")
 
-        # ── CONNECT ──
-        generate_btn.click(
-            fn=run_pipeline,
-            inputs=[topic_input, format_type, angle_select],
-            outputs=[
-                video_output, title_output, hook_output,
-                comment_bait_output,
-                tiktok_desc, tiktok_chars,
-                ig_desc, yt_title, yt_desc,
-                fb_post, tw_post,
-                posting_status, slides_json,
-            ],
-        )
-
-        # ── FOOTER ──
+        # ── VIDEO ──
         gr.Markdown("---")
-        gr.Markdown(
-            "<p style='text-align:center; color:#5a451c; font-size:0.8em; letter-spacing:0.15em'>"
-            "DAILYHISTORY v2.0 — VIRAL DARK HISTORY PIPELINE — GROQ + QWEN3 32B</p>"
+        gr.Markdown("### ④ Generate Video (voiceover + music)")
+        gr.Markdown("*Click after Step 1 completes. Takes 1-3 minutes.*")
+        generate_video_btn = gr.Button(
+            "🎬 STEP 2 — GENERATE VIDEO",
+            variant="secondary", size="lg",
         )
+        video_out = gr.Video(label="Download → upload to TikTok/IG/YT")
+
+        # ── WIRE ──
+        generate_text_btn.click(
+            fn=step1_generate_text,
+            inputs=[topic_input, format_type, angle_select, voice_select],
+            outputs=[
+                title_out, hook_out, comment_out,
+                tiktok_out, tiktok_chars,
+                ig_out, yt_title, yt_desc,
+                fb_out, tw_out,
+                status_out, slides_out,
+            ],
+            concurrency_limit=1,
+        )
+        generate_video_btn.click(
+            fn=step2_generate_video,
+            inputs=[],
+            outputs=[video_out],
+            concurrency_limit=1,
+        )
+
+        gr.Markdown("---")
+        gr.Markdown("<p style='text-align:center;color:#5a451c;font-size:0.8em;letter-spacing:0.15em'>"
+                    "DAILYHISTORY v3 — VOICEOVER + VIRAL PIPELINE — GROQ + QWEN3</p>")
 
     return app
 
 
-# ═══════════════════════════════════════════════════════════════
-# LAUNCH
-# ═══════════════════════════════════════════════════════════════
 if __name__ == "__main__":
     app = build_ui()
+    app.queue(default_concurrency_limit=1)
     app.launch(
-        server_name="127.0.0.1",
+        server_name="0.0.0.0",
         server_port=int(os.environ.get("PORT", 7860)),
         share=False,
         theme=THEME,
